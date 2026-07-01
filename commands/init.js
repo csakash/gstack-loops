@@ -4,6 +4,41 @@ const path = require('path');
 const { CONFIG_NAME } = require('../lib/config');
 const { run, c, die } = require('../lib/util');
 
+// The conventions block written into the workspace CLAUDE.md so every Claude Code
+// session in this workspace follows the same loop + gstack best practices.
+function conventionsSection(repoNames) {
+  return `## gstack-loops (loop-engineering)
+
+This workspace uses [gstack-loops](https://github.com/csakash/gstack-loops) on top of
+[gstack](https://github.com/garrytan/gstack). Repos: ${repoNames.join(', ')}.
+
+**Every feature is a loop. Never edit \`main\` or the root checkouts directly** — parallel
+sessions share these repos; an isolated worktree per loop is what stops them clobbering each
+other. Start each feature with \`gloop new <slug>\`, then work inside \`worktrees/<slug>/\`.
+
+The loop: \`/spec\` (commit \`SPEC.md\`) → build → \`/review\` + \`/qa\` (writer ≠ grader) →
+\`/ship\`. Drive it with \`gloop run <slug> --mode <interactive|bypass|autonomous>\` or the
+\`/loop-run\` slash command.
+
+- Use \`/browse\` for all web browsing/QA — never \`mcp__claude-in-chrome__*\`.
+- Definition of Done: behavior matches \`SPEC.md\`; \`npm run build\` clean per repo; \`/review\`
+  + \`/qa\` pass; no \`.env\` committed; cross-repo PRs cross-linked.
+- Landing several PRs at once: see [docs/PARALLEL_SHIPPING.md](docs/PARALLEL_SHIPPING.md)
+  (shared-DB isolation via \`hooks.preLoop\`, merge order, rebase-before-ship).
+- After a loop's PR merges: \`gloop reap\` (or \`gloop drop <slug> --delete-branch\`).
+`;
+}
+
+function writeConventions(root, repoNames) {
+  const file = path.join(root, 'CLAUDE.md');
+  const marker = '## gstack-loops';
+  const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  if (existing.includes(marker)) return 'present';
+  const body = (existing ? existing.replace(/\n*$/, '\n\n') : '') + conventionsSection(repoNames);
+  fs.writeFileSync(file, body);
+  return existing ? 'appended' : 'created';
+}
+
 function isGitRepo(dir) {
   return run('git', ['-C', dir, 'rev-parse', '--is-inside-work-tree'], { allowFail: true, stdio: 'pipe' }) === 'true'
     && run('git', ['-C', dir, 'rev-parse', '--show-toplevel'], { allowFail: true, stdio: 'pipe' }) === path.resolve(dir);
@@ -38,7 +73,13 @@ module.exports = function initCmd() {
 
   const cfg = { worktreeDir: 'worktrees', branchPrefix: 'feat/', portStride: 100, repos, hooks: { preLoop: null, postShip: null } };
   fs.writeFileSync(target, JSON.stringify(cfg, null, 2) + '\n');
-
   console.log(`${c.green('✓')} wrote ${CONFIG_NAME} with ${repos.length} repo(s): ${repos.map((r) => r.name).join(', ')}`);
+
+  // Codify the loop + gstack conventions into the workspace CLAUDE.md.
+  const outcome = writeConventions(root, repos.map((r) => r.name));
+  if (outcome === 'present') console.log(c.dim('  CLAUDE.md already has a gstack-loops section — left as is.'));
+  else console.log(`${c.green('✓')} ${outcome} gstack-loops conventions in CLAUDE.md (loop rules + Definition of Done)`);
+
   console.log(c.dim('  Next: set each repo\'s dev command + env wiring (e.g. {{url:backend}}), then: gloop new <slug>'));
+  console.log(c.dim('  Commit loops.json + CLAUDE.md so teammates inherit the setup.'));
 };

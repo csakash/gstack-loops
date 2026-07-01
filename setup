@@ -18,15 +18,40 @@ say ""
 say "Installing gstack-loops from $HERE"
 say ""
 
-# 1. Hard dependency: gstack.
+# 1. Hard dependency: gstack. Offer to install it (official one-liner) if missing,
+#    so a teammate gets the whole stack in one flow.
+GSTACK_REPO="https://github.com/garrytan/gstack.git"
+install_gstack() {
+  git clone --depth 1 "$GSTACK_REPO" "$SKILLS_DIR/gstack"
+  ( cd "$SKILLS_DIR/gstack" && ./setup )
+}
 if [ ! -d "$SKILLS_DIR/gstack/bin" ]; then
-  die "gstack is required but not found at $SKILLS_DIR/gstack.
+  warn "gstack not found at $SKILLS_DIR/gstack"
+  if [ -t 0 ] && [ "${GLOOP_AUTO_GSTACK:-}" != "0" ]; then
+    printf "  Install gstack now (git clone + ./setup)? [Y/n] "
+    read -r ans
+    case "${ans:-Y}" in
+      [Nn]*) die "gstack is required. Install it, then re-run: $GSTACK_REPO" ;;
+      *) install_gstack ;;
+    esac
+  elif [ "${GLOOP_AUTO_GSTACK:-}" = "1" ]; then
+    install_gstack
+  else
+    die "gstack is required but not found.
     Install it first:
-      git clone --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack
+      git clone --depth 1 $GSTACK_REPO ~/.claude/skills/gstack
       cd ~/.claude/skills/gstack && ./setup
-    Then re-run this installer."
+    (or re-run this with GLOOP_AUTO_GSTACK=1 to auto-install). Then re-run."
+  fi
 fi
-ok "gstack found"
+[ -d "$SKILLS_DIR/gstack/bin" ] || die "gstack install did not complete — check the output above."
+ok "gstack ready"
+
+# gstack best-practice nudges (non-blocking): proactive skills on, browse over chrome MCP.
+if [ -x "$SKILLS_DIR/gstack/bin/gstack-config" ]; then
+  _pro="$("$SKILLS_DIR/gstack/bin/gstack-config" get proactive 2>/dev/null || echo true)"
+  [ "$_pro" = "false" ] && warn "gstack 'proactive' is off — loops rely on skill routing; enable with: gstack-config set proactive true"
+fi
 
 # 2. node (required to run gloop).
 command -v node >/dev/null 2>&1 || die "node not found on PATH (need >=18)."
@@ -56,11 +81,12 @@ fi
 
 say ""
 if [ "$TEAM" = "1" ]; then
-  say "Team mode: in each workspace, run 'gloop init' and commit the generated loops.json"
-  say "so teammates who clone it just run this installer once and are ready."
+  say "Team mode: in each workspace, run 'gloop init' and commit the generated loops.json +"
+  say "CLAUDE.md so teammates who clone it just run this installer once and are ready."
+  say "For gstack's own team enforcement (per repo), also see: gstack-team-init required"
 fi
-say "Done. Next:"
+say "Done — gstack + gstack-loops are set up. Next:"
 say "  cd <your workspace with 1+ git repos>"
-say "  gloop init          # detect repos, scaffold loops.json"
-say "  gloop new my-feature # create paired worktrees on feat/my-feature"
+say "  gloop init            # detect repos → loops.json + CLAUDE.md conventions"
+say "  gloop new my-feature  # create paired worktrees on feat/my-feature"
 say ""

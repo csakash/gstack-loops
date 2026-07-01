@@ -7,6 +7,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const newCmd = require('../commands/new');
+const initCmd = require('../commands/init');
 const dropCmd = require('../commands/drop');
 const registry = require('../lib/registry');
 const { loadConfig } = require('../lib/config');
@@ -34,6 +35,25 @@ function withWorkspace(repos, cfgExtra, fn) {
   process.chdir(root);
   try { fn(root); } finally { process.chdir(cwd); fs.rmSync(root, { recursive: true, force: true }); }
 }
+
+test('init: detects repos, writes loops.json + CLAUDE.md conventions', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gloop-init-'));
+  ['api', 'web'].forEach((n) => makeRepo(root, n));
+  const cwd = process.cwd();
+  process.chdir(root);
+  try {
+    initCmd();
+    const cfg = JSON.parse(fs.readFileSync(path.join(root, 'loops.json'), 'utf8'));
+    assert.deepEqual(cfg.repos.map((r) => r.name).sort(), ['api', 'web']);
+    assert.ok(cfg.repos.every((r) => typeof r.basePort === 'number'));
+    const claude = fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8');
+    assert.match(claude, /## gstack-loops/);
+    assert.match(claude, /Never edit `main`/);
+  } finally {
+    process.chdir(cwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('single repo: new creates worktree on feat branch with wired port', () => {
   withWorkspace(
