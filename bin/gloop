@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+// gloop — loop-engineering CLI for Claude Code + gstack.
+// Subcommands: init | new | ls | run | stop | drop | reap | help
+const { c } = require('../lib/util');
+
+function parse(argv) {
+  const positional = [];
+  const flags = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--repos') flags.repos = (argv[++i] || '').split(',').map((s) => s.trim()).filter(Boolean);
+    else if (a === '--mode' || a === '-m') flags.mode = argv[++i];
+    else if (a === '--fix-cycles') flags.fixCycles = Number(argv[++i]);
+    else if (a === '--dry-run') flags.dryRun = true;
+    else if (a === '--no-servers') flags.noServers = true;
+    else if (a === '--force') flags.force = true;
+    else if (a === '--delete-branch') flags.deleteBranch = true;
+    else if (a === '--if-merged') flags.ifMerged = true;
+    else positional.push(a);
+  }
+  return { positional, flags };
+}
+
+function help() {
+  console.log(`${c.bold('gloop')} — parallel loop-engineering for Claude Code + gstack
+
+Usage:
+  gloop init                          scaffold loops.json from repos in this workspace
+  gloop new <slug> [--repos a,b]      create paired worktrees + wired ports on feat/<slug>
+  gloop ls                            list active loops (branch, ports, servers, PRs)
+  gloop run <slug> --mode <m>         drive the loop (m: interactive | bypass | autonomous)
+       [--dry-run] [--no-servers] [--fix-cycles N]
+  gloop stop <slug>                   stop the loop's dev servers
+  gloop drop <slug> [--force] [--delete-branch] [--if-merged]
+  gloop reap                          drop every loop whose PR has merged
+
+Modes:
+  interactive   you drive an in-session loop, permission prompts on
+  bypass        headless, auto-edits, stops before push for your approval
+  autonomous    headless, end-to-end from SPEC.md, opens a ready-for-review PR
+`);
+}
+
+async function main() {
+  const [cmd, ...rest] = process.argv.slice(2);
+  const { positional, flags } = parse(rest);
+  const slug = positional[0];
+  try {
+    switch (cmd) {
+      case 'init': return require('../commands/init')();
+      case 'new': return require('../commands/new')(slug, flags);
+      case 'ls': return await require('../commands/ls')();
+      case 'run': return await require('../commands/run')(slug, flags);
+      case 'stop': return require('../commands/stop')(slug);
+      case 'drop': return require('../commands/drop')(slug, flags);
+      case 'reap': return require('../commands/reap')();
+      case 'help': case '--help': case '-h': case undefined: return help();
+      default:
+        console.error(c.red(`Unknown command "${cmd}".`));
+        help();
+        process.exit(1);
+    }
+  } catch (e) {
+    console.error(c.red('✗ ') + (e && e.message ? e.message : String(e)));
+    process.exit(1);
+  }
+}
+
+main();

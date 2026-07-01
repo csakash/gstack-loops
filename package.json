@@ -1,0 +1,11 @@
+{
+  "name": "gstack-loops",
+  "version": "0.1.0",
+  "description": "Distributable multi-repo loop-engineering harness for Claude Code + gstack",
+  "bin": { "gloop": "bin/gloop" },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "license": "MIT",
+  "engines": { "node": ">=18" }
+}

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# gstack-loops installer. Verifies deps, registers slash commands, puts `gloop`
+# on PATH. Run from the cloned repo:  cd ~/.claude/skills/gstack-loops && ./setup
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+SKILLS_DIR="$HOME/.claude/skills"
+BIN_DIR="$HOME/.local/bin"
+TEAM=0
+[ "${1:-}" = "--team" ] && TEAM=1
+
+say() { printf '%s\n' "$*"; }
+ok()  { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+warn(){ printf '  \033[33m!\033[0m %s\n' "$*"; }
+die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+
+say ""
+say "Installing gstack-loops from $HERE"
+say ""
+
+# 1. Hard dependency: gstack.
+if [ ! -d "$SKILLS_DIR/gstack/bin" ]; then
+  die "gstack is required but not found at $SKILLS_DIR/gstack.
+    Install it first:
+      git clone --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack
+      cd ~/.claude/skills/gstack && ./setup
+    Then re-run this installer."
+fi
+ok "gstack found"
+
+# 2. node (required to run gloop).
+command -v node >/dev/null 2>&1 || die "node not found on PATH (need >=18)."
+ok "node $(node --version)"
+
+# 3. Soft deps: gh + claude (needed for shipping / the headless driver).
+command -v gh >/dev/null 2>&1 && ok "gh found" || warn "gh not found — /ship and 'gloop reap' need it (https://cli.github.com/)"
+command -v claude >/dev/null 2>&1 && ok "claude CLI found" || warn "claude CLI not found — the headless driver ('gloop run --mode bypass|autonomous') needs it"
+
+# 4. Register slash-command skills by symlinking them to the top-level skills dir.
+mkdir -p "$SKILLS_DIR"
+for d in "$HERE"/skills/*/; do
+  name="$(basename "$d")"
+  ln -sfn "$d" "$SKILLS_DIR/$name"
+done
+ok "registered slash commands: $(cd "$HERE/skills" && ls -d */ | tr -d / | tr '\n' ' ')"
+
+# 5. Put gloop on PATH.
+mkdir -p "$BIN_DIR"
+ln -sfn "$HERE/bin/gloop" "$BIN_DIR/gloop"
+chmod +x "$HERE/bin/gloop"
+if printf '%s' ":$PATH:" | grep -q ":$BIN_DIR:"; then
+  ok "gloop linked into $BIN_DIR (on PATH)"
+else
+  warn "gloop linked into $BIN_DIR — add it to PATH:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+fi
+
+say ""
+if [ "$TEAM" = "1" ]; then
+  say "Team mode: in each workspace, run 'gloop init' and commit the generated loops.json"
+  say "so teammates who clone it just run this installer once and are ready."
+fi
+say "Done. Next:"
+say "  cd <your workspace with 1+ git repos>"
+say "  gloop init          # detect repos, scaffold loops.json"
+say "  gloop new my-feature # create paired worktrees on feat/my-feature"
+say ""
