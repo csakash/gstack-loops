@@ -42,6 +42,7 @@ Slash commands (in a Claude Code session): `/loop-new`, `/loop-run`, `/loop-ls`,
 
 ## Docs
 
+- [QUICKSTART.md](QUICKSTART.md) — zero to shipping a PR; capabilities, modes, what to expect
 - [SPEC.md](SPEC.md) — full v1 design + acceptance criteria
 - [docs/PARALLEL_SHIPPING.md](docs/PARALLEL_SHIPPING.md) — landing many PRs without conflicts
 
