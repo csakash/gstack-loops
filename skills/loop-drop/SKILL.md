@@ -1,18 +1,12 @@
 ---
 name: loop-drop
 description: |
-  Tear down a gstack-loops feature loop after its PR is merged — stop its dev
-  servers and remove its worktrees/branch. Refuses if there's unmerged or
-  uncommitted work. Use after a loop's PR lands. Wraps `gloop drop` / `gloop reap`.
+  Alias of /gloop-drop — tear down a merged loop. Kept for compatibility; prefer /gloop-drop.
 allowed-tools:
   - Bash
+  - Skill
 ---
 
-# /loop-drop — tear down a merged loop
+# /loop-drop (alias → /gloop-drop)
 
-- To drop one loop: `gloop drop <slug> --delete-branch`. It refuses if the loop
-  has unmerged commits or uncommitted changes — surface that to the user rather
-  than forcing, unless they explicitly ask to discard the work (`--force`).
-- To drop every loop whose PR has already merged: `gloop reap`.
-
-Always confirm with the user before running `--force` (it discards unmerged work).
+This is a compatibility alias. Invoke **`/gloop-drop`** and follow it. Behavior is identical.

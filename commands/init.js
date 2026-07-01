@@ -16,9 +16,10 @@ This workspace uses [gstack-loops](https://github.com/csakash/gstack-loops) on t
 sessions share these repos; an isolated worktree per loop is what stops them clobbering each
 other. Start each feature with \`gloop new <slug>\`, then work inside \`worktrees/<slug>/\`.
 
-The loop: \`/spec\` (commit \`SPEC.md\`) → build → \`/review\` + \`/qa\` (writer ≠ grader) →
-\`/ship\`. Drive it with \`gloop run <slug> --mode <interactive|bypass|autonomous>\` or the
-\`/loop-run\` slash command.
+The loop: \`/gloop-spec\` (commit \`SPEC.md\`) → \`/gloop-build\` (build → \`/review\` + \`/qa\`
+until green) → \`/gloop-ship\` (raise the PR). There's a \`/gloop-*\` shortcut for every step,
+or just \`/gloop <what you want>\` to drive it conversationally. For headless runs use
+\`gloop run <slug> --mode <interactive|bypass|autonomous>\`.
 
 - Use \`/browse\` for all web browsing/QA — never \`mcp__claude-in-chrome__*\`.
 - Definition of Done: behavior matches \`SPEC.md\`; \`npm run build\` clean per repo; \`/review\`
