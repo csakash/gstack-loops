@@ -1,14 +1,12 @@
 ---
 name: loop-ls
 description: |
-  List active gstack-loops feature loops with their branch, ports, dev-server
-  status, and PR state. Use to see what parallel loops are in flight. Wraps
-  `gloop ls`.
+  Alias of /gloop-ls — list active loops. Kept for compatibility; prefer /gloop-ls.
 allowed-tools:
   - Bash
+  - Skill
 ---
 
-# /loop-ls — show active loops
+# /loop-ls (alias → /gloop-ls)
 
-Run `gloop ls` and relay the result. If the user asks about a specific loop,
-point them at `gloop run <slug>`, `gloop stop <slug>`, or `gloop drop <slug>`.
+This is a compatibility alias. Invoke **`/gloop-ls`** and follow it. Behavior is identical.

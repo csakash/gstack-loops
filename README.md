@@ -38,7 +38,14 @@ gloop ls                                # see all loops: ports, servers, PR stat
 gloop reap                              # tear down loops whose PR has merged
 ```
 
-Slash commands (in a Claude Code session): `/loop-new`, `/loop-run`, `/loop-ls`, `/loop-drop`.
+Slash commands (in a Claude Code session), one per step:
+`/gloop-init`, `/gloop-new`, `/gloop-spec`, `/gloop-build`, `/gloop-run`, `/gloop-ship`,
+`/gloop-ls`, `/gloop-drop`, `/gloop-reap` (the old `/loop-*` names still work as aliases).
+
+Or skip the command names entirely: **`/gloop <what you want>`** is a conversational driver —
+it works out where the loop is and advances it (create → spec → build → ship), driving to a PR
+unless you say stop. `/gloop-build` implements `SPEC.md` and loops build → /review → /qa until
+green; `/gloop-ship` raises the PR for the worktree's branch.
 
 ## Docs
 
