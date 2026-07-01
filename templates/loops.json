@@ -1,0 +1,28 @@
+{
+  "worktreeDir": "worktrees",
+  "branchPrefix": "feat/",
+  "portStride": 100,
+  "repos": [
+    {
+      "name": "backend",
+      "path": "backend",
+      "baseBranch": "main",
+      "basePort": 4000,
+      "dev": ["npm", "run", "dev", "--prefix", "backend"],
+      "env": { "PORT": "{{port}}", "FRONTEND_URL": "{{url:frontend}}" }
+    },
+    {
+      "name": "frontend",
+      "path": "frontend",
+      "baseBranch": "main",
+      "basePort": 5173,
+      "dev": ["npm", "run", "dev", "--prefix", "frontend"],
+      "serve": { "portFlag": "--port" },
+      "env": { "VITE_API_URL": "{{url:backend}}" }
+    }
+  ],
+  "hooks": {
+    "preLoop": null,
+    "postShip": null
+  }
+}
