@@ -4,7 +4,8 @@ Distributable multi-repo loop-engineering harness for Claude Code + gstack. Ship
 CLI + `/loop-*` slash commands that run parallel feature loops (`/spec → build → /review →
 /qa → /ship`) in isolated git worktrees across one or many repos.
 
-See [SPEC.md](SPEC.md) for the v1 design and acceptance criteria.
+See [SPEC.md](SPEC.md) for the current loop spec (v1.1 review layers) and
+[docs/SPEC-v1.md](docs/SPEC-v1.md) for the v1 design and acceptance criteria.
 
 ## Layout
 

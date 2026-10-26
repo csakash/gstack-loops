@@ -50,7 +50,8 @@ green; `/gloop-ship` raises the PR for the worktree's branch.
 ## Docs
 
 - [QUICKSTART.md](QUICKSTART.md) — zero to shipping a PR; capabilities, modes, what to expect
-- [SPEC.md](SPEC.md) — full v1 design + acceptance criteria
+- [SPEC.md](SPEC.md) — v1.1 spec: review layers (proof, fresh-context review, convergence, risk tiers)
+- [docs/SPEC-v1.md](docs/SPEC-v1.md) — full v1 design + acceptance criteria
 - [docs/PARALLEL_SHIPPING.md](docs/PARALLEL_SHIPPING.md) — landing many PRs without conflicts
 
 ## Config: `loops.json`
