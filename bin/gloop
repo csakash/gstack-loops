@@ -16,6 +16,7 @@ function parse(argv) {
     else if (a === '--force') flags.force = true;
     else if (a === '--delete-branch') flags.deleteBranch = true;
     else if (a === '--if-merged') flags.ifMerged = true;
+    else if (a === '--legacy-driver') flags.legacyDriver = true;
     else positional.push(a);
   }
   return { positional, flags };
@@ -29,7 +30,7 @@ Usage:
   gloop new <slug> [--repos a,b]      create paired worktrees + wired ports on feat/<slug>
   gloop ls                            list active loops (branch, ports, servers, PRs)
   gloop run <slug> --mode <m>         drive the loop (m: interactive | bypass | autonomous)
-       [--dry-run] [--no-servers] [--fix-cycles N]
+       [--dry-run] [--no-servers] [--fix-cycles N] [--legacy-driver]
   gloop stop <slug>                   stop the loop's dev servers
   gloop drop <slug> [--force] [--delete-branch] [--if-merged]
   gloop reap                          drop every loop whose PR has merged
@@ -38,6 +39,11 @@ Modes:
   interactive   you drive an in-session loop, permission prompts on
   bypass        headless, auto-edits, stops before push for your approval
   autonomous    headless, end-to-end from SPEC.md, opens a ready-for-review PR
+
+Headless runs are a stage runner: build → fresh-context review ⇄ fix → qa → build gate
+→ proof check → ship. Each stage is its own agent process; the reviewer is read-only.
+Evidence lands in .loops/runs/<slug>/latest; every run appends to .loops/history.json.
+Exit code 1 when a run ends BLOCKED.
 `);
 }
 
@@ -50,7 +56,11 @@ async function main() {
       case 'init': return require('../commands/init')();
       case 'new': return require('../commands/new')(slug, flags);
       case 'ls': return await require('../commands/ls')();
-      case 'run': return await require('../commands/run')(slug, flags);
+      case 'run': {
+        const outcome = await require('../commands/run')(slug, flags);
+        if (outcome === 'blocked') process.exitCode = 1;
+        return outcome;
+      }
       case 'stop': return require('../commands/stop')(slug);
       case 'drop': return require('../commands/drop')(slug, flags);
       case 'reap': return require('../commands/reap')();

@@ -1,6 +1,6 @@
 ---
 title: gstack-loops v1.1 — review layers: proof, fresh-context review, convergence, risk tiers, feedback
-status: ready-to-build
+status: P0 built; P1, P2 ready-to-build
 owner: csakash
 depends_on: gstack-loops v1 (docs/SPEC-v1.md), gstack (/review, /qa, /ship), Claude Code (/security-review)
 supports: Claude Code only
@@ -66,12 +66,12 @@ build ──► review ──► fix ──┐  (≤ fixCycles)
 
 | Stage | Process | Perm mode | Must leave behind | Blocks when |
 |---|---|---|---|---|
-| `build` | author | mode's | commits; `proof/tests.txt`; `PROOF.md` draft | tests not run |
-| `review` | **reviewer** (fresh) | read-only (`default` + prompt: never edit; driver verifies tree unchanged) | `review/cycle-N.json` | — |
-| `fix` | author | mode's | `review/cycle-N.resolutions.json`, commits | — |
+| `build` | author | mode's | commits; `proof/tests.txt`; `PROOF.md` draft | tests not run, no commits |
+| `review` | **reviewer** (fresh) | read-only: `Read Grep Glob` only; Bash + write tools denied; driver verifies tree unchanged | findings JSON on stdout → driver writes `review/cycle-N.json` | — |
+| `fix` | author | mode's | `review/fix-N.resolutions.json`, commits | — |
 | `security` | **reviewer** (fresh) | read-only | `security/cycle-N.json` | — |
 | `qa` | author | mode's | `proof/qa.md` + screenshots, commits | `/qa` not clean within budget |
-| `buildgate` | author | mode's | `proof/build-<repo>.txt` | any repo's build fails |
+| `buildgate` | driver (no LLM) | — | `proof/build-<repo>.txt` | any repo's build fails |
 | `risk` | driver (no LLM) | — | `risk.json` | — (downgrades ship) |
 | `ship` | author | mode's | PR URLs in `status.json` | — |
 
@@ -203,6 +203,43 @@ recurring-finding loop the article describes is: a finding keeps appearing → a
 | bypass | `acceptEdits` | separate `claude -p`, read-only | auto, converging | **stops before push** |
 | autonomous | `bypassPermissions` | separate `claude -p`, read-only | auto, converging | ready PR, **unless sensitive path → stops before push** |
 
+## P0 as built (2026-10-26)
+
+Status: **built**, 58 tests green. Deviations from the design above, each made for a reason
+found while building:
+
+- **The reviewer has no shell.** The driver computes each diff (`git diff <range>`) and saves it
+  as `review/cycle-N.<repo>.diff`; the reviewer gets `Read`, `Grep`, `Glob` and nothing else.
+  Allowing `Bash(git diff:*)` would not match the `git -C <repo> diff` form the reviewer needs
+  from the feature folder, and a shell is more than a reviewer needs. Verified against the real
+  CLI: the reviewer could not run a command, read the diff file, found a planted bug, and
+  returned JSON that passed validation with the tree untouched.
+- **The reviewer does not write its findings file.** It replies with one fenced JSON block; the
+  driver extracts, validates and writes `review/cycle-N.json`, and keeps the raw reply as
+  `cycle-N.raw.txt` for when validation fails.
+- **Fix attempts are numbered on their own** (`fix-N.resolutions.json`). A fix that commits
+  nothing gets no re-review, so two attempts can follow one review; sharing the review's cycle
+  number let a later attempt re-read an earlier attempt's stale resolutions.
+- **The build gate is run by the driver**, not an agent: the output saved as proof is the real
+  output and cannot be paraphrased.
+- **Code changed during QA gets a diff-only review** of those commits, sharing the fix budget,
+  so nothing ships unreviewed.
+- **Bypass ship spawns no agent**: the driver prints `git push` + `gh pr create --body-file
+  PROOF.md` per touched repo.
+- **Validation is strict on honesty**: a summary that contradicts the findings list (says
+  "1 issue", lists none; or "no issues", lists some) is invalid; a stage that writes no
+  `stage-<name>.json` is not done; a build with no commits is blocked.
+- Orchestration lives in a new agent-agnostic `lib/pipeline.js`; everything Claude-specific
+  (flags, prompts, spawning) stays in `lib/driver.js`.
+
+**Known issue, not fixed here (pre-dates v1.1):** bypass mode runs authors with
+`--permission-mode acceptEdits`, which auto-accepts file edits but not shell commands. Verified
+against the real CLI: a headless `acceptEdits` session cannot run `git commit`. So a bypass run
+cannot commit or run tests, and with v1.1 it now ends `BLOCKED: build produced no commits`
+instead of failing silently. Fixing it needs a decision on which commands bypass authors may run
+(e.g. allow test/build/commit, deny `git push` and `gh pr create` so "stops before push" is
+enforced by permissions too). Autonomous mode is unaffected.
+
 ## Phases
 
 **P0 — backbone (land first).** Stage runner; author/reviewer processes; findings + resolution
@@ -306,7 +343,8 @@ everything; loops remain ordinary branches and worktrees.
 
 | Path | Change |
 |---|---|
-| `lib/driver.js` | stage runner; per-stage prompts; contracts; convergence; tree-unchanged check; `--legacy-driver` |
+| `lib/driver.js` | agent-specific: per-stage prompts, reviewer/author argv, spawning; legacy v1 prompt behind `--legacy-driver` |
+| `lib/pipeline.js` | **new** (P0) — agent-agnostic stage runner: contracts, convergence, tree-unchanged check, build gate, proof check, history record, dry-run plan |
 | `lib/rules.js` | **new** — shared hard-rule strings used by prompts and asserted in skills |
 | `lib/review.js` | **new** — findings/resolution schema validation, blocking decision, diff ranges |
 | `lib/risk.js` | **new** — zero-dep glob matcher + sensitive-path check |
@@ -323,7 +361,8 @@ everything; loops remain ordinary branches and worktrees.
 | `setup` | `--team` prints branch-protection recommendations |
 | `docs/REVIEW_LAYERS.md` | **new** — article layers ↔ gloop implementation map |
 | `docs/SPEC-v1.md` | moved from `SPEC.md` |
-| `test/units.test.js`, `test/integration.test.js`, `test/skills.test.js`, `test/fixtures/fake-claude` | per testing plan |
+| `test/review.test.js`, `test/pipeline.test.js`, `test/fixtures/bin/claude` | P0 tests: review contract units; stage runner against a fake `claude` on PATH |
+| `test/units.test.js`, `test/integration.test.js`, `test/skills.test.js` | per testing plan (P1/P2) |
 | `README.md`, `QUICKSTART.md`, `CLAUDE.md` | document the layers, `stats`, `REVIEW.md`, modes table |
 
 ## Out of scope (v1.1)
