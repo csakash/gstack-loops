@@ -259,3 +259,52 @@ test('gloop stats works without gh', async () => {
     assert.match(res.stdout, /No runs yet/);
   });
 });
+
+// Found by the e2e run: a repo whose branch only carries SPEC.md never gets a PR, and reap
+// waited on it forever.
+test('reap drops a loop whose other repo only carried SPEC.md', async () => {
+  const cwd = process.cwd();
+  const log = console.log;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gloop-out2-'));
+  try {
+    console.log = () => {};
+    for (const n of ['api', 'web']) {
+      const repo = path.join(root, n);
+      const remote = path.join(root, `${n}.git`);
+      execFileSync('git', ['init', '-q', '--bare', remote]);
+      fs.mkdirSync(repo);
+      git(repo, 'init', '-q', '-b', 'main'); git(repo, 'config', 'user.email', 't@t.dev'); git(repo, 'config', 'user.name', 't');
+      fs.writeFileSync(path.join(repo, 'README.md'), n); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'init');
+      git(repo, 'remote', 'add', 'origin', remote); git(repo, 'push', '-q', 'origin', 'main');
+    }
+    fs.writeFileSync(path.join(root, 'loops.json'), JSON.stringify({ repos: [{ name: 'api', basePort: 4000 }, { name: 'web', basePort: 5000 }] }));
+    process.chdir(root);
+    newCmd('x', {});
+    for (const n of ['api', 'web']) {
+      const w = path.join(root, 'worktrees', 'x', n);
+      fs.writeFileSync(path.join(w, 'SPEC.md'), '# spec\n'); git(w, 'add', '.'); git(w, 'commit', '-qm', 'spec');
+    }
+    const api = path.join(root, 'worktrees', 'x', 'api');
+    fs.writeFileSync(path.join(api, 'a.js'), '1\n'); git(api, 'add', '.'); git(api, 'commit', '-qm', 'work');
+    git(api, 'push', '-q', 'origin', 'HEAD:main');
+    ghScenario(root, { view: { 'feat/x': mergedPr(git(api, 'rev-parse', 'HEAD')) } });
+    // the fake gh answers per branch, not per repo: make web report no PR by giving it its own scenario file
+    const webScen = path.join(root, 'web-gh.json');
+    fs.writeFileSync(webScen, JSON.stringify({}));
+    const realScen = process.env.FAKE_GH_SCENARIO;
+    const ghBin = path.join(root, 'gh-bin');
+    fs.mkdirSync(ghBin);
+    fs.writeFileSync(path.join(ghBin, 'gh'), `#!/bin/sh\ncase "$(pwd)" in *"/web") FAKE_GH_SCENARIO=${webScen} exec ${path.join(GH_BIN, 'gh')} "$@";; *) FAKE_GH_SCENARIO=${realScen} exec ${path.join(GH_BIN, 'gh')} "$@";; esac\n`);
+    fs.chmodSync(path.join(ghBin, 'gh'), 0o755);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${ghBin}${path.delimiter}${oldPath}`;
+    try { reapCmd(); } finally { process.env.PATH = oldPath; }
+    assert.equal(registry.getLoop(loadConfig(root), 'x'), null, 'loop reaped although web has no PR');
+    const [rec] = history.load(loadConfig(root)).runs;
+    assert.deepEqual(Object.keys(rec.merged), ['api']);
+  } finally {
+    console.log = log;
+    process.chdir(cwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -53,7 +53,8 @@ async function scenario(scen, opts = {}) {
   git(repo, 'config', 'user.email', 't@t.dev');
   git(repo, 'config', 'user.name', 'test');
   fs.writeFileSync(path.join(repo, 'README.md'), '# svc\n');
-  git(repo, 'add', 'README.md');
+  if (opts.baseSpec) fs.writeFileSync(path.join(repo, 'SPEC.md'), '# Project spec (the project\'s own document)\n');
+  git(repo, 'add', '.');
   git(repo, 'commit', '-q', '-m', 'init');
   // opts.remote: 'plain' = an origin; 'pushurl' = an origin that also has an explicit
   // pushurl, which git's pushInsteadOf rewriting never applies to.
@@ -85,8 +86,21 @@ async function scenario(scen, opts = {}) {
     console.log = () => {};
     newCmd('demo', {});
     console.log = quietLog;
+    if (opts.mainMoves) {
+      const file = opts.mainMoves === 'conflict' ? 'feature.js' : 'other.txt';
+      fs.writeFileSync(path.join(repo, file), 'landed on main by another loop\n');
+      git(repo, 'add', file);
+      git(repo, 'commit', '-q', '-m', 'another loop merged');
+      git(repo, 'push', '-q', 'origin', 'main');
+    }
     fs.writeFileSync(path.join(root, 'worktrees', 'demo', 'svc', 'SPEC.md'), '# spec\nbuild feature.js\n');
-    const { remote: _remote, review: _review, rootReviewMd: _md, ...runOpts } = opts;
+    // opts.specCommitted: as /gloop-spec leaves it, SPEC.md committed on the loop branch.
+    if (opts.specCommitted) {
+      const w = path.join(root, 'worktrees', 'demo', 'svc');
+      git(w, 'add', 'SPEC.md');
+      git(w, 'commit', '-q', '-m', 'spec: demo');
+    }
+    const { remote: _remote, review: _review, rootReviewMd: _md, specCommitted: _sc, baseSpec: _bs, mainMoves: _mm, ...runOpts } = opts;
     const outcome = await runCmd('demo', { mode: 'bypass', noServers: true, quiet: true, ...runOpts });
     const cfg = loadConfig(root);
     const calls = fs.existsSync(logFile)
@@ -213,6 +227,123 @@ test('a build that commits nothing, or reports blocked, never reaches review', a
     assert.match(noCommit.run.reason, /no commits on the branch/);
     assert.match(blocked.run.reason, /build: SPEC.md is ambiguous about auth/);
   } finally { cleanup(noCommit); cleanup(blocked); }
+});
+
+test('a committed SPEC.md does not count as the build\'s work (found by the e2e run)', async () => {
+  const r = await scenario({ build: S.build.filter((s) => !s.commit), review: S.clean, qa: S.qa }, { specCommitted: true });
+  try {
+    assert.equal(r.outcome, 'blocked');
+    assert.deepEqual(r.keys, ['build']);
+    assert.match(r.run.reason, /build produced no commits/);
+  } finally { cleanup(r); }
+});
+
+test('a repo whose only change is SPEC.md gets no PR (found by the e2e run)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gloop-spec-only-'));
+  const cwd = process.cwd();
+  const log = console.log;
+  try {
+    for (const n of ['api', 'web']) {
+      const d = path.join(root, n);
+      fs.mkdirSync(d);
+      git(d, 'init', '-q', '-b', 'main'); git(d, 'config', 'user.email', 't@t.dev'); git(d, 'config', 'user.name', 't');
+      fs.writeFileSync(path.join(d, 'README.md'), n); git(d, 'add', '.'); git(d, 'commit', '-qm', 'init');
+    }
+    fs.writeFileSync(path.join(root, 'loops.json'), JSON.stringify({ repos: [{ name: 'api', basePort: 4000 }, { name: 'web', basePort: 5000 }] }));
+    process.chdir(root);
+    console.log = () => {};
+    newCmd('x', {});
+    console.log = log;
+    for (const n of ['api', 'web']) {
+      const w = path.join(root, 'worktrees', 'x', n);
+      fs.writeFileSync(path.join(w, 'SPEC.md'), '# spec\n'); git(w, 'add', '.'); git(w, 'commit', '-qm', 'spec');
+    }
+    const api = path.join(root, 'worktrees', 'x', 'api');
+    fs.writeFileSync(path.join(api, 'a.js'), '1\n'); git(api, 'add', '.'); git(api, 'commit', '-qm', 'work');
+    const cfg = loadConfig(root);
+    assert.deepEqual(require('../lib/pipeline').__test.touchedNames(cfg, registry.getLoop(cfg, 'x')), ['api']);
+  } finally {
+    console.log = log;
+    process.chdir(cwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a SPEC.md the branch added is moved into the PR body before ship (found by the e2e run)', async () => {
+  const r = await scenario({ build: S.build, review: S.clean, qa: S.qa }, { specCommitted: true });
+  try {
+    assert.equal(r.outcome, 'needs-human');
+    const w = path.join(r.root, 'worktrees', 'demo', 'svc');
+    assert.doesNotMatch(git(w, 'diff', '--name-only', 'main...HEAD'), /SPEC\.md/, 'the branch no longer adds SPEC.md');
+    assert.equal(git(w, 'log', '-1', '--format=%s'), require('../lib/pipeline').SPEC_OUT_MESSAGE);
+    const body = fs.readFileSync(path.join(r.root, r.run.runDir, 'proof', 'PR_BODY.md'), 'utf8');
+    assert.match(body, /## How to revert[\s\S]*## Spec[\s\S]*build feature\.js/);
+  } finally { cleanup(r); }
+});
+
+test('a SPEC.md that already exists on the base branch is the project\'s and is left alone', async () => {
+  const r = await scenario({ build: S.build, review: S.clean, qa: S.qa }, { specCommitted: true, baseSpec: true });
+  try {
+    assert.equal(r.outcome, 'needs-human');
+    const w = path.join(r.root, 'worktrees', 'demo', 'svc');
+    assert.ok(fs.existsSync(path.join(w, 'SPEC.md')), 'not deleted');
+    assert.notEqual(git(w, 'log', '-1', '--format=%s'), require('../lib/pipeline').SPEC_OUT_MESSAGE);
+  } finally { cleanup(r); }
+});
+
+test('two loops that each committed SPEC.md merge one after the other without conflict', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gloop-parallel-'));
+  const cwd = process.cwd();
+  const log = console.log;
+  try {
+    const repo = path.join(root, 'svc');
+    fs.mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main'); git(repo, 'config', 'user.email', 't@t.dev'); git(repo, 'config', 'user.name', 't');
+    fs.writeFileSync(path.join(repo, 'README.md'), '# svc\n'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'init');
+    fs.writeFileSync(path.join(root, 'loops.json'), JSON.stringify({ repos: [{ name: 'svc', basePort: 4000 }] }));
+    process.chdir(root);
+    console.log = () => {};
+    for (const slug of ['one', 'two']) newCmd(slug, {});
+    console.log = log;
+    const cfg = loadConfig(root);
+    for (const slug of ['one', 'two']) {
+      const w = path.join(root, 'worktrees', slug, 'svc');
+      fs.writeFileSync(path.join(w, 'SPEC.md'), `# spec ${slug}\n`); git(w, 'add', '.'); git(w, 'commit', '-qm', `spec: ${slug}`);
+      fs.writeFileSync(path.join(w, `${slug}.js`), '1\n'); git(w, 'add', '.'); git(w, 'commit', '-qm', `work ${slug}`);
+      const specs = require('../lib/pipeline').__test.specOut(cfg, registry.getLoop(cfg, slug));
+      assert.deepEqual(specs, { svc: `# spec ${slug}\n` });
+    }
+    git(repo, 'merge', '-q', '--no-ff', 'feat/one', '-m', 'merge one');
+    git(repo, 'merge', '-q', '--no-ff', 'feat/two', '-m', 'merge two'); // threw "CONFLICT (add/add) SPEC.md" before
+    assert.ok(!fs.existsSync(path.join(repo, 'SPEC.md')), 'no loop spec on main');
+    assert.ok(fs.existsSync(path.join(repo, 'one.js')) && fs.existsSync(path.join(repo, 'two.js')));
+  } finally {
+    console.log = log;
+    process.chdir(cwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a branch that no longer merges into the latest main is blocked, not shipped (found by the e2e run)', async () => {
+  const r = await scenario({ build: S.build, review: S.clean, qa: S.qa, ship: [{ write: '$RUN/stage-ship.json', content: { status: 'ok', prs: { svc: 'u' } } }] },
+    { mode: 'autonomous', remote: 'plain', mainMoves: 'conflict' });
+  try {
+    assert.equal(r.outcome, 'blocked');
+    assert.equal(r.run.blockedGate, 'base');
+    assert.match(r.run.reason, /conflicts with the latest base branch — bring the branch up to date and re-run\. svc: feature\.js/);
+    assert.ok(!r.keys.includes('ship'), 'no PR attempted');
+  } finally { cleanup(r); }
+});
+
+test('a base branch that moved but merges cleanly passes, with a note', async () => {
+  const r = await scenario({ build: S.build, review: S.clean, qa: S.qa }, { remote: 'plain', mainMoves: 'unrelated' });
+  try {
+    assert.equal(r.outcome, 'needs-human');
+    const status = JSON.parse(fs.readFileSync(path.join(r.root, r.run.runDir, 'status.json'), 'utf8'));
+    const base = status.stages.find((st) => st.stage === 'base');
+    assert.equal(base.status, 'ok');
+    assert.match(base.note, /svc: origin\/main moved 1 commit\(s\) since the branch was cut; still merges cleanly/);
+  } finally { cleanup(r); }
 });
 
 test('a stage that does not report is not done', async () => {
@@ -439,7 +570,7 @@ test('autonomous ship: PROOF.md goes in the PR body; PR URLs recorded', async ()
   try {
     assert.equal(r.outcome, 'shipped');
     assert.deepEqual(r.keys, ['build', 'review:1', 'security:1', 'qa', 'ship']);
-    assert.match(r.calls[4].args[1], /PR body MUST contain \S+proof\/PROOF\.md verbatim/);
+    assert.match(r.calls[4].args[1], /PR body MUST be \S+proof\/PR_BODY\.md verbatim/);
     assert.deepEqual(r.calls[4].args.slice(2, 4), ['--permission-mode', 'bypassPermissions']);
     assert.ok(!r.calls[4].args.includes('--disallowedTools'), 'only the autonomous ship stage may push');
     assert.ok(r.calls[0].args.includes('--disallowedTools'), 'autonomous build may not push');
@@ -460,8 +591,8 @@ test('dry-run lists every stage with its prompt and spawns nothing', async () =>
     assert.equal(r.outcome, 'dry-run');
     assert.deepEqual(r.calls, [], 'no agent process was spawned');
     assert.equal(r.runs.length, 0, 'no history record for a dry run');
-    const order = lines.join('\n').match(/── \d+\. (\w+)/g).map((s) => s.replace(/── \d+\. /, ''));
-    assert.deepEqual(order, ['build', 'review', 'fix', 'review', 'security', 'secfix', 'security', 'qa', 'review', 'buildgate', 'proof', 'risk', 'ship']);
+    const order = lines.join('\n').match(/── \d+\. ([\w-]+)/g).map((s) => s.replace(/── \d+\. /, ''));
+    assert.deepEqual(order, ['build', 'review', 'fix', 'review', 'security', 'secfix', 'security', 'servers', 'qa', 'review', 'buildgate', 'proof', 'risk', 'base', 'spec-out', 'ship']);
     assert.match(lines.join('\n'), /GLOOP-STAGE: review cycle=1/);
     assert.match(lines.join('\n'), /--disallowedTools Bash Edit Write NotebookEdit/);
     assert.ok(!fs.existsSync(path.join(r.root, '.loops', 'runs')), 'run dir not created');

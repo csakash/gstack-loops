@@ -19,6 +19,7 @@ skills/loop-*/       slash commands (registered by ./setup)
 templates/           loops.json + REVIEW.md scaffolds (gloop init), branch-protection.md (setup --team)
 test/                node:test suites
 test/fixtures/       fake `claude` (bin/) and fake `gh` (gh-bin/) the tests put on PATH
+test/e2e/            real-agent end-to-end harness: mock two-repo app, mock GitHub (see its README)
 docs/                REVIEW_LAYERS.md, PARALLEL_SHIPPING.md, SPEC-v1.md
 setup                installer
 ```
@@ -47,6 +48,8 @@ setup                installer
   `lib/driver.js` (deny rule + git env) and `lib/pipeline.js` (tracking-ref check).
 - Anything that talks to GitHub goes through `lib/gh.js` and must return null, not throw,
   when `gh` is missing. Tests use the fake `gh` in `test/fixtures/gh-bin/`; none touch GitHub.
+- Before a release, run the real-agent end-to-end harness in `test/e2e/` (not part of
+  `npm test`: it costs tokens). Every defect it finds gets a regression test in `npm test`.
 - Pipeline tests use the fake `claude` in `test/fixtures/bin/`. Add a failure scenario there
   for every new way a stage can lie or half-finish, before its happy path.
 

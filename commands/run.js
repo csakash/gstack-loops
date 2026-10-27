@@ -7,10 +7,10 @@ const { loadConfig, repoByName, devCwd } = require('../lib/config');
 const registry = require('../lib/registry');
 const { portsForSlot } = require('../lib/ports');
 const { resolveEnvMap } = require('../lib/env-template');
-const { startServer, stopServer, isAlive } = require('../lib/proc');
+const { startServer, stopServer, isAlive, freeLoopPorts } = require('../lib/proc');
 const driver = require('../lib/driver');
 const { runPipeline, describeStages, resolveFixCycles } = require('../lib/pipeline');
-const { c, die } = require('../lib/util');
+const { c, die, readJSON } = require('../lib/util');
 
 function startServers(cfg, loop, log) {
   const ports = portsForSlot(cfg, loop.slot);
@@ -24,6 +24,9 @@ function startServers(cfg, loop, log) {
     const logFile = path.join(cfg.root, '.loops', 'logs', `${driver.loopSlug(loop) || 'loop'}-${name}.log`);
     const cwd = devCwd(repo, driver.featureDir(cfg, loop), path.join(cfg.root, loop.worktrees[name]));
     const s = startServer({ cwd, command: repo.dev[0], args, env, port: ports[name], logFile });
+    // How to start it again, for an agent that changes code during QA.
+    s.cwd = cwd;
+    s.cmd = [...Object.entries(env).map(([k, v]) => `${k}=${v}`), repo.dev[0], ...args].join(' ');
     servers[name] = s;
     log(`  ${c.green('▸')} ${name} server → :${s.port} (pid ${s.pid}, log ${path.relative(cfg.root, logFile)})`);
   }
@@ -90,26 +93,41 @@ module.exports = async function runCmd(slug, opts = {}) {
     return 'dry-run';
   }
 
-  let servers = {};
-  if (!opts.noServers) {
+  const start = () => {
     log(`\n${c.bold('starting servers')} for "${slug}"...`);
-    servers = startServers(cfg, loop, log);
+    const servers = startServers(cfg, loop, log);
     registry.updateLoop(cfg, slug, (e) => { e.servers = servers; e.status = 'running'; return e; });
-  }
+    return servers;
+  };
 
   let result;
   if (opts.legacyDriver) {
+    if (!opts.noServers) start();
     log(`\n${c.bold('launching')} ${mode} loop with the legacy single-process driver...\n`);
     const code = await driver.spawnLegacy(cfg, loop, mode, { fixCycles: resolveFixCycles(cfg, opts) });
     result = code === 0 ? { outcome: 'shipped' } : { outcome: 'blocked', gate: 'legacy', reason: `session exited ${code}` };
   } else {
     log(`\n${c.bold('launching')} ${mode} loop: stage runner, author perm=${driver.MODES[mode].permissionMode}, reviewer read-only`);
-    result = await runPipeline(cfg, loop, mode, { fixCycles: opts.fixCycles, log, echo: !opts.quiet });
+    // Servers start right before QA, from the code the earlier stages built, not before
+    // the build: a dev server that does not hot-reload would otherwise serve stale code.
+    result = await runPipeline(cfg, loop, mode, { fixCycles: opts.fixCycles, log, echo: !opts.quiet, startServers: opts.noServers ? null : start });
   }
 
   // Servers stop whatever the outcome; the worktree stays for the PR or for inspection.
   const fresh = registry.getLoop(cfg, slug) || loop;
   stopServers(fresh);
+  // Servers an agent restarted during QA and recorded in <runDir>/servers.json.
+  let restarted = {};
+  try { restarted = (result.runDir && readJSON(path.join(result.runDir, 'servers.json'), {})) || {}; } catch { restarted = {}; }
+  for (const rec of Object.values(restarted)) {
+    if (rec && rec.pid && isAlive(rec.pid)) stopServer(rec.pid);
+  }
+  // Anything still on the loop's ports that runs from inside the loop's folder.
+  const slotPorts = portsForSlot(cfg, loop.slot);
+  const ports = loop.repos.map((n) => slotPorts[n]).filter(Boolean);
+  const freed = freeLoopPorts(ports, driver.featureDir(cfg, loop));
+  freed.stopped.forEach((x) => log(c.dim(`  stopped a leftover server on :${x.port} (pid ${x.pid}) started during the run`)));
+  freed.foreign.forEach((x) => log(`${c.yellow('!')} port :${x.port} is still in use by pid ${x.pid}${x.cwd ? ` (${x.cwd})` : ''}, which this loop did not start — left running`));
   registry.updateLoop(cfg, slug, (e) => {
     e.servers = {};
     e.status = result.outcome;

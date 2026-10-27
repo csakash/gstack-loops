@@ -22,10 +22,17 @@ module.exports = function dropCmd(slug, opts = {}) {
     if (!ghAvailable()) die('--if-merged needs the gh CLI.');
     const prs = {};
     for (const name of loop.repos) {
-      const pr = prForBranch(path.join(cfg.root, loop.worktrees[name]), loop.branch);
-      if (!pr || !pr.merged) { console.log(c.dim(`skip "${slug}": ${name} PR not merged yet`)); return; }
-      prs[name] = pr;
+      const wtAbs = path.join(cfg.root, loop.worktrees[name]);
+      const pr = prForBranch(wtAbs, loop.branch);
+      if (pr && pr.merged) { prs[name] = pr; continue; }
+      // A repo whose branch changes nothing but SPEC.md never gets a PR; it must not hold
+      // the loop open forever (found by the e2e run).
+      const repo = repoByName(cfg, name);
+      if (!pr && wt.hasWork(wtAbs, wt.baseRef(wtAbs, repo ? repo.baseBranch : 'main')) === false) continue;
+      console.log(c.dim(`skip "${slug}": ${name} PR not merged yet`));
+      return;
     }
+    if (Object.keys(prs).length === 0) { console.log(c.dim(`skip "${slug}": no merged PR`)); return; }
     // Record the merge before the worktree goes: it is the only moment all PR details are
     // at hand. Bookkeeping must never stop a reap.
     try {

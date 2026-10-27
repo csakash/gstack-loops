@@ -201,3 +201,16 @@ test('dev servers start with the commands gloop init writes (multi-repo and sing
     try { assert.ok(await waitUp(servers.solo.port), 'single-repo dev server is listening'); } finally { stopServers({ servers }); }
   } finally { process.chdir(cwd); fs.rmSync(single, { recursive: true, force: true }); }
 });
+
+// Found while testing the e2e fixes: a repo with no "dev" command crashed `gloop new`.
+test('new: a repo without a dev command gets no launch entry and does not crash', () => {
+  withWorkspace(
+    [{ name: 'lib', path: 'lib', basePort: 4000 }, { name: 'svc', path: 'svc', basePort: 5000, dev: ['npm', 'run', 'dev', '--prefix', 'svc'], env: {} }],
+    {},
+    (root) => {
+      newCmd('nodev', {});
+      const launch = JSON.parse(fs.readFileSync(path.join(root, 'worktrees', 'nodev', '.claude', 'launch.json'), 'utf8'));
+      assert.deepEqual(launch.configurations.map((x) => x.name), ['svc']);
+    },
+  );
+});

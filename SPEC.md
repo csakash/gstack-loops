@@ -393,6 +393,25 @@ body; it is now two tests, one per matching rule.
 - P2-4 `gloop init` in a workspace whose CLAUDE.md section predates P2 leaves it unchanged and
   prints a hint.
 
+## End-to-end run (2026-10-27)
+
+A real-agent run on a two-repo mock project (`test/e2e/`, see its README) exercised every
+headless mode and the full lifecycle. It found seven defects that the fake-agent suite could not
+see, all fixed with regression tests that fail on the old code:
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | Dev servers never started in multi-repo workspaces: `init` writes `npm run dev --prefix <repo>`, but servers ran from inside the repo | Dev commands run where they would in the root checkout (`config.devCwd`) |
+| 2 | Servers started before the build, so QA tested stale code; a server an agent restarted outlived the run | Servers start right before QA and must be listening; QA is told how to restart one and records it in `servers.json`; after the run, anything on the loop's ports running from inside the loop folder is stopped, anything else is only reported |
+| 3 | Every loop committed `SPEC.md` at the repo root, so the second of two parallel loops always conflicted at merge | `spec-out` stage: a `SPEC.md` the branch added is removed in a final commit and carried in the PR body; a project's own `SPEC.md` is left alone. `/gloop-ship` does the same |
+| 4 | A branch that no longer merged into the latest main was shipped | `base` stage: `git merge-tree` against the freshly fetched base; conflicts block with the file list. `/gloop-ship` stops and reports |
+| 5 | A committed `SPEC.md` satisfied "build produced no commits" | The build is judged by its own commits |
+| 6 | A spec-only repo got a PR and kept its loop from ever being reaped | Repos with no change besides `SPEC.md` are not shipped and do not hold up `reap` |
+| 7 | `gloop new` crashed on a repo without a `dev` command | Such repos get no launch entry |
+
+Headless stage order is now: build → review ⇄ fix → security ⇄ secfix → servers → qa →
+[review, security on qa's commits] → buildgate → proof → risk → base → spec-out → ship.
+
 ## Phases
 
 **P0 — backbone (land first).** Stage runner; author/reviewer processes; findings + resolution
