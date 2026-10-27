@@ -5,6 +5,8 @@
 //   { commit: { repo, file?, content? } }   commit a change in a worktree
 //   { write: "<path>", content }            "$RUN/..." = run dir, else relative to cwd;
 //                                           "$CYCLE" in the path = current cycle
+//   { push: { repo } }                      try `git -C <repo> push origin HEAD`; failures
+//                                           are logged, not fatal (the driver blocks it)
 //   { stdout: <string | object> }           object is printed as a fenced json block
 //   { exit: <code> }
 const fs = require('fs');
@@ -37,6 +39,13 @@ for (const s of steps) {
     fs.writeFileSync(path.join(dir, file), s.commit.content || `${key} ${Date.now()} ${Math.random()}\n`);
     execFileSync('git', ['-C', dir, 'add', file], { stdio: 'pipe' });
     execFileSync('git', ['-C', dir, 'commit', '-q', '-m', `fake ${key}`], { stdio: 'pipe' });
+  }
+  if (s.push) {
+    try {
+      execFileSync('git', ['-C', path.resolve(s.push.repo), 'push', 'origin', 'HEAD'], { stdio: 'pipe' });
+    } catch (e) {
+      if (process.env.FAKE_CLAUDE_LOG) fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, `${JSON.stringify({ key, pushFailed: String(e.stderr || e.message).trim() })}\n`);
+    }
   }
   if (s.write) {
     const p = resolvePath(s.write);

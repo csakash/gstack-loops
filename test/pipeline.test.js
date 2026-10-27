@@ -55,6 +55,15 @@ async function scenario(scen, opts = {}) {
   fs.writeFileSync(path.join(repo, 'README.md'), '# svc\n');
   git(repo, 'add', 'README.md');
   git(repo, 'commit', '-q', '-m', 'init');
+  // opts.remote: 'plain' = an origin; 'pushurl' = an origin that also has an explicit
+  // pushurl, which git's pushInsteadOf rewriting never applies to.
+  const remote = path.join(root, 'remote.git');
+  if (opts.remote) {
+    execFileSync('git', ['init', '-q', '--bare', remote]);
+    git(repo, 'remote', 'add', 'origin', remote);
+    if (opts.remote === 'pushurl') git(repo, 'config', 'remote.origin.pushurl', remote);
+    git(repo, 'push', '-q', 'origin', 'main');
+  }
   fs.writeFileSync(path.join(root, 'loops.json'), JSON.stringify({
     portStride: 100,
     repos: [{ name: 'svc', path: 'svc', basePort: 4000, dev: ['npm', 'run', 'dev'], env: {} }],
@@ -74,13 +83,19 @@ async function scenario(scen, opts = {}) {
     newCmd('demo', {});
     console.log = quietLog;
     fs.writeFileSync(path.join(root, 'worktrees', 'demo', 'svc', 'SPEC.md'), '# spec\nbuild feature.js\n');
-    const outcome = await runCmd('demo', { mode: 'bypass', noServers: true, quiet: true, ...opts });
+    const { remote: _remote, ...runOpts } = opts;
+    const outcome = await runCmd('demo', { mode: 'bypass', noServers: true, quiet: true, ...runOpts });
     const cfg = loadConfig(root);
     const calls = fs.existsSync(logFile)
       ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
       : [];
     const runs = history.load(cfg).runs;
-    return { root, outcome, calls, keys: calls.map((c) => c.key), runs, run: runs[runs.length - 1], loop: registry.getLoop(cfg, 'demo') };
+    const agentCalls = calls.filter((c) => c.args);
+    const remoteBranches = opts.remote ? git(remote, 'branch', '--format=%(refname:short)').split('\n').filter(Boolean) : [];
+    return {
+      root, outcome, calls: agentCalls, keys: agentCalls.map((c) => c.key), pushFailures: calls.filter((c) => c.pushFailed),
+      runs, run: runs[runs.length - 1], loop: registry.getLoop(cfg, 'demo'), remoteBranches,
+    };
   } finally {
     console.log = quietLog;
     process.chdir(cwd);
@@ -212,6 +227,36 @@ test('autonomous ship that reports no PR URLs ends BLOCKED', async () => {
   } finally { cleanup(r); }
 });
 
+test('a bypass stage that tries to push is stopped by git, and the run carries on', async () => {
+  const r = await scenario({ build: [...S.build, { push: { repo: 'svc' } }], review: S.clean, qa: S.qa }, { remote: 'plain' });
+  try {
+    assert.equal(r.pushFailures.length, 1);
+    assert.match(r.pushFailures[0].pushFailed, /gloop-push-blocked/);
+    assert.deepEqual(r.remoteBranches, ['main'], 'nothing reached the remote');
+    assert.equal(r.outcome, 'needs-human');
+  } finally { cleanup(r); }
+});
+
+test('a push that slips past git (remote with its own pushurl) ends BLOCKED: push-guard', async () => {
+  const r = await scenario({ build: [...S.build, { push: { repo: 'svc' } }], review: S.clean, qa: S.qa }, { remote: 'pushurl' });
+  try {
+    assert.equal(r.outcome, 'blocked');
+    assert.equal(r.run.blockedGate, 'push-guard');
+    assert.match(r.run.reason, /build pushed feat\/demo in svc, but only an autonomous ship may push/);
+    assert.deepEqual(r.keys, ['build'], 'nothing runs after the guard trips');
+  } finally { cleanup(r); }
+});
+
+test('autonomous ship is the one stage allowed to push', async () => {
+  const ship = [{ push: { repo: 'svc' } }, { write: '$RUN/stage-ship.json', content: { status: 'ok', prs: { svc: 'https://github.com/o/svc/pull/1' } } }];
+  const r = await scenario({ build: S.build, review: S.clean, qa: S.qa, ship }, { mode: 'autonomous', remote: 'plain' });
+  try {
+    assert.equal(r.outcome, 'shipped');
+    assert.deepEqual(r.pushFailures, []);
+    assert.deepEqual(r.remoteBranches.sort(), ['feat/demo', 'main']);
+  } finally { cleanup(r); }
+});
+
 // ---- happy paths -----------------------------------------------------------------
 
 test('clean run: build and review are separate processes; reviewer is read-only; bypass stops before push', async () => {
@@ -224,7 +269,9 @@ test('clean run: build and review are separate processes; reviewer is read-only;
     assert.deepEqual(rev.args.slice(2, 4), ['--permission-mode', 'default']);
     const denied = rev.args.slice(rev.args.indexOf('--disallowedTools') + 1);
     assert.deepEqual(denied, ['Bash', 'Edit', 'Write', 'NotebookEdit'], 'reviewer has no shell and no write tools');
-    assert.ok(!build.args.includes('--disallowedTools'));
+    const allowed = build.args.slice(build.args.indexOf('--allowedTools') + 1, build.args.indexOf('--disallowedTools'));
+    assert.deepEqual(allowed, ['Bash'], 'bypass author may run a shell (tests, commits)');
+    assert.deepEqual(build.args.slice(build.args.indexOf('--disallowedTools') + 1), ['Bash(git push:*)', 'Bash(gh pr create:*)', 'Bash(gh pr merge:*)']);
     const m = rev.args[1].match(/svc: main\.\.\.HEAD {2}-> {2}(\S+cycle-1\.svc\.diff)/);
     assert.ok(m, 'cycle 1 reviews the whole branch, from a diff file the driver wrote');
     assert.match(fs.readFileSync(m[1], 'utf8'), /\+\+\+ b\/feature\.js/);
@@ -296,6 +343,8 @@ test('autonomous ship: PROOF.md goes in the PR body; PR URLs recorded', async ()
     assert.deepEqual(r.keys, ['build', 'review:1', 'qa', 'ship']);
     assert.match(r.calls[3].args[1], /PR body MUST contain \S+proof\/PROOF\.md verbatim/);
     assert.deepEqual(r.calls[3].args.slice(2, 4), ['--permission-mode', 'bypassPermissions']);
+    assert.ok(!r.calls[3].args.includes('--disallowedTools'), 'only the autonomous ship stage may push');
+    assert.ok(r.calls[0].args.includes('--disallowedTools'), 'autonomous build may not push');
     assert.deepEqual(r.run.prs, { svc: 'https://github.com/o/svc/pull/7' });
     assert.equal(r.loop.status, 'shipped');
   } finally { cleanup(r); }

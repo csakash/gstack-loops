@@ -17,8 +17,10 @@ and `autonomous` require a committed `SPEC.md` on the branch — if it's missing
 
 Headless runs are a stage runner: build → fresh-context review ⇄ fix (diff-only re-review,
 budget `--fix-cycles N`, default 2) → qa → build gate → proof check → ship. Each stage is its
-own `claude -p`; the reviewer is read-only. `bypass` always stops before push and prints the
-push + PR commands; `autonomous` opens the PR with `PROOF.md` as the body.
+own `claude -p`; the reviewer is read-only. `bypass` authors can edit, run tests and commit,
+but cannot push: it stops before push and prints the push + PR commands. `autonomous` opens the
+PR with `PROOF.md` as the body. In both modes only the final ship stage may push; a stage that
+pushes anyway ends the run `BLOCKED: push-guard`.
 
 - Preview every stage's prompt and command: `--dry-run`.
 - When a run ends, report the outcome (shipped / needs-human / BLOCKED at <gate>) and point at

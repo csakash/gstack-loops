@@ -200,7 +200,7 @@ recurring-finding loop the article describes is: a finding keeps appearing → a
 | Mode | Author perm | Reviewer | review+security | PR step |
 |---|---|---|---|---|
 | interactive | live session | `/gloop-build` runs them in-session (new-context subagents) | you drive | you run `/gloop-ship` |
-| bypass | `acceptEdits` | separate `claude -p`, read-only | auto, converging | **stops before push** |
+| bypass | `acceptEdits` + shell; push denied (3 layers) | separate `claude -p`, read-only | auto, converging | **stops before push** |
 | autonomous | `bypassPermissions` | separate `claude -p`, read-only | auto, converging | ready PR, **unless sensitive path → stops before push** |
 
 ## P0 as built (2026-10-26)
@@ -232,13 +232,23 @@ found while building:
 - Orchestration lives in a new agent-agnostic `lib/pipeline.js`; everything Claude-specific
   (flags, prompts, spawning) stays in `lib/driver.js`.
 
-**Known issue, not fixed here (pre-dates v1.1):** bypass mode runs authors with
-`--permission-mode acceptEdits`, which auto-accepts file edits but not shell commands. Verified
-against the real CLI: a headless `acceptEdits` session cannot run `git commit`. So a bypass run
-cannot commit or run tests, and with v1.1 it now ends `BLOCKED: build produced no commits`
-instead of failing silently. Fixing it needs a decision on which commands bypass authors may run
-(e.g. allow test/build/commit, deny `git push` and `gh pr create` so "stops before push" is
-enforced by permissions too). Autonomous mode is unaffected.
+**Fixed after P0 (2026-10-27): bypass could not commit, and nothing but the prompt stopped
+a push.** Bypass authors ran with `acceptEdits`, which auto-accepts edits but not shell
+commands; verified against the real CLI, a headless `acceptEdits` session could not run
+`git commit`, so every bypass run ended `BLOCKED: build produced no commits`. Now:
+
+- Bypass authors get `--allowedTools Bash` (tests, builds, commits run headlessly).
+- **Only an autonomous `ship` stage may push.** Every other stage, in every mode, is guarded
+  three ways, because each layer alone leaks (all verified against real git / the real CLI):
+  1. Permission deny: `Bash(git push:*)`, `Bash(gh pr create:*)`, `Bash(gh pr merge:*)`.
+     Catches `git push ...` and `cd repo && git push`; does **not** match `git -C repo push`.
+  2. Git URL rewriting in the agent's env (`url.gloop-push-blocked://.pushInsteadOf` for
+     `https://`, `ssh://`, `git@`, `/`, …, appended to any existing `GIT_CONFIG_COUNT`).
+     Catches `git -C repo push` and explicit URLs; git does **not** apply it to a remote that
+     has its own `pushurl`.
+  3. After every author stage, the driver compares `refs/remotes/origin/<branch>`; if it moved,
+     the run ends `BLOCKED: push-guard`. Catches the pushurl case after the fact (the branch
+     reached the remote, but no PR was opened and the run stops).
 
 ## Phases
 

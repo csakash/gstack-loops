@@ -9,7 +9,7 @@ const { portsForSlot } = require('../lib/ports');
 const { resolveEnvMap } = require('../lib/env-template');
 const { startServer, stopServer, isAlive } = require('../lib/proc');
 const driver = require('../lib/driver');
-const { runPipeline, describeStages } = require('../lib/pipeline');
+const { runPipeline, describeStages, resolveFixCycles } = require('../lib/pipeline');
 const { c, die } = require('../lib/util');
 
 function startServers(cfg, loop, log) {
@@ -77,7 +77,7 @@ module.exports = async function runCmd(slug, opts = {}) {
   }
 
   if (opts.legacyDriver) {
-    const { bin, args } = driver.legacyArgs(cfg, loop, mode, { fixCycles: opts.fixCycles });
+    const { bin, args } = driver.legacyArgs(cfg, loop, mode, { fixCycles: resolveFixCycles(cfg, opts) });
     if (opts.dryRun) {
       log(`\n${c.bold('[dry-run, legacy driver]')} mode=${mode}  perm=${driver.MODES[mode].permissionMode}`);
       printArgv(log, [bin, ...args]);
@@ -99,7 +99,7 @@ module.exports = async function runCmd(slug, opts = {}) {
   let result;
   if (opts.legacyDriver) {
     log(`\n${c.bold('launching')} ${mode} loop with the legacy single-process driver...\n`);
-    const code = await driver.spawnLegacy(cfg, loop, mode, { fixCycles: opts.fixCycles });
+    const code = await driver.spawnLegacy(cfg, loop, mode, { fixCycles: resolveFixCycles(cfg, opts) });
     result = code === 0 ? { outcome: 'shipped' } : { outcome: 'blocked', gate: 'legacy', reason: `session exited ${code}` };
   } else {
     log(`\n${c.bold('launching')} ${mode} loop: stage runner, author perm=${driver.MODES[mode].permissionMode}, reviewer read-only`);
