@@ -44,3 +44,7 @@ test('applyEnv: replaces existing key, appends new', () => {
   assert.match(next, /^VITE_API_URL=http:\/\/localhost:4100$/m);
   assert.equal((next.match(/^PORT=/gm) || []).length, 1); // no duplicate
 });
+
+test('applyEnv: appended keys follow the last line without a blank gap', () => {
+  assert.equal(applyEnv('A=1\nB=2\n\n', { C: '3' }), 'A=1\nB=2\nC=3\n');
+});

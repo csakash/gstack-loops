@@ -13,6 +13,9 @@ fully autonomous.
 - **Modes.** `interactive` (you drive, prompts on), `bypass` (headless, auto-edits, stops
   before push for your approval), `autonomous` (headless, unattended, opens a ready-for-review
   PR from an approved `SPEC.md`).
+- **Review layers.** A separate read-only reviewer and security reviewer check every change,
+  fixes converge within a budget, every claim needs saved proof, and changes to sensitive paths
+  (CI, auth, billing, migrations) always wait for a human before push.
 - **Cleanup.** Stops dev servers when the loop finishes; removes the worktree once its PR merges.
 
 ## Install
@@ -35,7 +38,9 @@ gloop new attachment-previews           # paired worktrees + wired ports on feat
 # write SPEC.md in the worktree (via /spec), then:
 gloop run attachment-previews --mode interactive   # or bypass / autonomous
 gloop ls                                # see all loops: ports, servers, PR state
-gloop reap                              # tear down loops whose PR has merged
+gloop risk attachment-previews          # sensitive files it touches (CI, auth, billing, …)
+gloop reap                              # tear down merged loops; record merges and reverts
+gloop stats                             # outcomes, where runs block, cycles-to-pass, revert rate
 ```
 
 Slash commands (in a Claude Code session), one per step:
@@ -50,7 +55,9 @@ green; `/gloop-ship` raises the PR for the worktree's branch.
 ## Docs
 
 - [QUICKSTART.md](QUICKSTART.md) — zero to shipping a PR; capabilities, modes, what to expect
-- [SPEC.md](SPEC.md) — full v1 design + acceptance criteria
+- [SPEC.md](SPEC.md) — v1.1 spec: review layers (proof, fresh-context review, convergence, risk tiers)
+- [docs/SPEC-v1.md](docs/SPEC-v1.md) — full v1 design + acceptance criteria
+- [docs/REVIEW_LAYERS.md](docs/REVIEW_LAYERS.md) — the review layers, and where each lives
 - [docs/PARALLEL_SHIPPING.md](docs/PARALLEL_SHIPPING.md) — landing many PRs without conflicts
 
 ## Config: `loops.json`

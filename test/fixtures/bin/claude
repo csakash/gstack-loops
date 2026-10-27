@@ -1,0 +1,60 @@
+#!/usr/bin/env node
+// Fake `claude` for pipeline tests. Reads the stage from the prompt's marker lines,
+// logs the call, then plays the canned steps for that stage from FAKE_CLAUDE_SCENARIO.
+// Lookup order: "<stage>:<cycle>", then "<stage>". Steps:
+//   { commit: { repo, file?, content? } }   commit a change in a worktree
+//   { write: "<path>", content }            "$RUN/..." = run dir, else relative to cwd;
+//                                           "$CYCLE" in the path = current cycle
+//   { push: { repo } }                      try `git -C <repo> push origin HEAD`; failures
+//                                           are logged, not fatal (the driver blocks it)
+//   { stdout: <string | object> }           object is printed as a fenced json block
+//   { exit: <code> }
+const fs = require('fs');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const args = process.argv.slice(2);
+const prompt = args[args.indexOf('-p') + 1] || '';
+const m = prompt.match(/^GLOOP-STAGE: (\w+)(?: cycle=(\d+))?/m);
+const stage = m ? m[1] : 'legacy';
+const cycle = m && m[2] ? m[2] : '';
+const runDir = (prompt.match(/^RUN DIR: (.+)$/m) || [])[1] || '';
+const key = cycle ? `${stage}:${cycle}` : stage;
+
+if (process.env.FAKE_CLAUDE_LOG) {
+  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, `${JSON.stringify({ key, args, cwd: process.cwd() })}\n`);
+}
+const scen = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_SCENARIO, 'utf8'));
+const steps = scen[key] || scen[stage] || [];
+
+const resolvePath = (p) => {
+  const q = p.replace(/\$CYCLE/g, cycle);
+  return q.startsWith('$RUN/') ? path.join(runDir, q.slice(5)) : path.resolve(q);
+};
+
+for (const s of steps) {
+  if (s.commit) {
+    const dir = path.resolve(s.commit.repo);
+    const file = s.commit.file || `${key.replace(':', '-')}.txt`;
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), s.commit.content || `${key} ${Date.now()} ${Math.random()}\n`);
+    execFileSync('git', ['-C', dir, 'add', file], { stdio: 'pipe' });
+    execFileSync('git', ['-C', dir, 'commit', '-q', '-m', `fake ${key}`], { stdio: 'pipe' });
+  }
+  if (s.push) {
+    try {
+      execFileSync('git', ['-C', path.resolve(s.push.repo), 'push', 'origin', 'HEAD'], { stdio: 'pipe' });
+    } catch (e) {
+      if (process.env.FAKE_CLAUDE_LOG) fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, `${JSON.stringify({ key, pushFailed: String(e.stderr || e.message).trim() })}\n`);
+    }
+  }
+  if (s.write) {
+    const p = resolvePath(s.write);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, typeof s.content === 'string' ? s.content : JSON.stringify(s.content));
+  }
+  if (s.stdout !== undefined) {
+    process.stdout.write(typeof s.stdout === 'string' ? s.stdout : `Review done.\n\`\`\`json\n${JSON.stringify(s.stdout)}\n\`\`\`\n`);
+  }
+  if (s.exit !== undefined) process.exit(s.exit);
+}

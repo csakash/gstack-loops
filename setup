@@ -84,6 +84,11 @@ if [ "$TEAM" = "1" ]; then
   say "Team mode: in each workspace, run 'gloop init' and commit the generated loops.json +"
   say "CLAUDE.md so teammates who clone it just run this installer once and are ready."
   say "For gstack's own team enforcement (per repo), also see: gstack-team-init required"
+  say ""
+  say "Recommended GitHub settings for every repo that takes loop PRs (printed, not applied):"
+  say ""
+  cat "$HERE/templates/branch-protection.md"
+  say ""
 fi
 say "Done — gstack + gstack-loops are set up. Next:"
 say "  cd <your workspace with 1+ git repos>"

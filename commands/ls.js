@@ -16,7 +16,8 @@ module.exports = async function lsCmd() {
   const gh = ghAvailable();
   for (const slug of slugs) {
     const l = reg.loops[slug];
-    console.log(`\n${c.bold('●')} ${slug}   branch=${l.branch}   slot=${l.slot}   status=${l.status || '?'}`);
+    const why = l.reason && l.status !== 'shipped' ? ` (${l.reason.length > 90 ? `${l.reason.slice(0, 87)}...` : l.reason})` : '';
+    console.log(`\n${c.bold('●')} ${slug}   branch=${l.branch}   slot=${l.slot}   status=${l.status || '?'}${why}`);
     for (const name of l.repos) {
       const repo = repoByName(cfg, name);
       const wtAbs = path.join(cfg.root, l.worktrees[name]);

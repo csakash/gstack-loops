@@ -145,3 +145,72 @@ test('drop without --force refuses when commits are ahead', () => {
     },
   );
 });
+
+// Found by the e2e run: `gloop init` writes `npm run dev --prefix <repo>`, but servers were
+// started from inside the repo worktree, so npm looked for <repo>/<repo> and nothing came up.
+test('dev servers start with the commands gloop init writes (multi-repo and single-repo)', async () => {
+  const { startServers, stopServers } = require('../commands/run');
+  const { portInUse } = require('../lib/proc');
+  const DEV = 'node -e "require(\'http\').createServer((q,s)=>s.end(\'ok\')).listen(process.env.PORT)"';
+  const pkg = JSON.stringify({ name: 'x', scripts: { dev: DEV } });
+  const waitUp = async (port) => { for (let i = 0; i < 50; i += 1) { if (await portInUse(port)) return true; await new Promise((r) => setTimeout(r, 100)); } return false; };
+
+  // Multi-repo: exactly what `gloop init` writes for two sibling repos.
+  const multi = fs.mkdtempSync(path.join(os.tmpdir(), 'gloop-dev-'));
+  const cwd = process.cwd();
+  try {
+    for (const n of ['api', 'web']) { makeRepo(multi, n); fs.writeFileSync(path.join(multi, n, 'package.json'), pkg); git(path.join(multi, n), 'add', '.'); git(path.join(multi, n), 'commit', '-qm', 'pkg'); }
+    process.chdir(multi);
+    const log = console.log; console.log = () => {};
+    try { initCmd(); } finally { console.log = log; }
+    const cfgJson = JSON.parse(fs.readFileSync('loops.json', 'utf8'));
+    cfgJson.repos.forEach((r, i) => { r.basePort = 20000 + i * 1000 + Math.floor(Math.random() * 400); r.env = { PORT: '{{port}}' }; });
+    fs.writeFileSync('loops.json', JSON.stringify(cfgJson));
+    console.log = () => {};
+    try { newCmd('srv', {}); } finally { console.log = log; }
+    const cfg = loadConfig(multi);
+    const loop = registry.getLoop(cfg, 'srv');
+    const servers = startServers(cfg, loop, () => {});
+    try {
+      for (const n of ['api', 'web']) assert.ok(await waitUp(servers[n].port), `${n} dev server is listening on :${servers[n].port}`);
+    } finally { stopServers({ servers }); }
+  } finally { process.chdir(cwd); fs.rmSync(multi, { recursive: true, force: true }); }
+
+  // Single-repo: the workspace root is the repo (path ".").
+  const single = fs.mkdtempSync(path.join(os.tmpdir(), 'gloop-dev1-'));
+  try {
+    const repo = path.join(single, 'solo');
+    makeRepo(single, 'solo');
+    fs.writeFileSync(path.join(repo, 'package.json'), pkg);
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'worktrees/\n.loops/\n');
+    git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'pkg');
+    process.chdir(repo);
+    const log = console.log; console.log = () => {};
+    try { initCmd(); } finally { console.log = log; }
+    const cfgJson = JSON.parse(fs.readFileSync('loops.json', 'utf8'));
+    cfgJson.repos[0].basePort = 23000 + Math.floor(Math.random() * 400);
+    cfgJson.repos[0].env = { PORT: '{{port}}' };
+    fs.writeFileSync('loops.json', JSON.stringify(cfgJson));
+    console.log = () => {};
+    try { newCmd('one', {}); } finally { console.log = log; }
+    const cfg = loadConfig(repo);
+    const loop = registry.getLoop(cfg, 'one');
+    const launch = JSON.parse(fs.readFileSync(path.join(repo, 'worktrees', 'one', '.claude', 'launch.json'), 'utf8'));
+    assert.deepEqual(launch.configurations[0].runtimeArgs, ['run', 'dev', '--prefix', 'solo'], 'launch.json reaches the repo from the feature folder');
+    const servers = startServers(cfg, loop, () => {});
+    try { assert.ok(await waitUp(servers.solo.port), 'single-repo dev server is listening'); } finally { stopServers({ servers }); }
+  } finally { process.chdir(cwd); fs.rmSync(single, { recursive: true, force: true }); }
+});
+
+// Found while testing the e2e fixes: a repo with no "dev" command crashed `gloop new`.
+test('new: a repo without a dev command gets no launch entry and does not crash', () => {
+  withWorkspace(
+    [{ name: 'lib', path: 'lib', basePort: 4000 }, { name: 'svc', path: 'svc', basePort: 5000, dev: ['npm', 'run', 'dev', '--prefix', 'svc'], env: {} }],
+    {},
+    (root) => {
+      newCmd('nodev', {});
+      const launch = JSON.parse(fs.readFileSync(path.join(root, 'worktrees', 'nodev', '.claude', 'launch.json'), 'utf8'));
+      assert.deepEqual(launch.configurations.map((x) => x.name), ['svc']);
+    },
+  );
+});

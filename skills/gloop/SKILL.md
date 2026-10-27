@@ -38,6 +38,7 @@ the user should never need to remember command names.
 | `SPEC.md` exists | "make it real" | run `/gloop-build` (build→/review→/qa until clean), then `/gloop-ship` |
 | Prompt is a tweak to an in-progress build | refine | apply it within `/gloop-build` |
 | Prompt says stop / pause / wait | halt | stop after the current step; report state |
+| Prompt asks how loops are going | report | run `gloop stats` and summarize it in a few lines |
 
 ## 3. Autonomy: drive to a PR unless told to stop
 

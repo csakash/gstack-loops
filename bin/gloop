@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // gloop — loop-engineering CLI for Claude Code + gstack.
-// Subcommands: init | new | ls | run | stop | drop | reap | help
+// Subcommands: init | new | ls | run | stop | risk | drop | reap | stats | help
 const { c } = require('../lib/util');
 
 function parse(argv) {
@@ -16,6 +16,10 @@ function parse(argv) {
     else if (a === '--force') flags.force = true;
     else if (a === '--delete-branch') flags.deleteBranch = true;
     else if (a === '--if-merged') flags.ifMerged = true;
+    else if (a === '--legacy-driver') flags.legacyDriver = true;
+    else if (a === '--json') flags.json = true;
+    else if (a === '--refresh') flags.refresh = true;
+    else if (a === '--print-conventions') flags.printConventions = true;
     else positional.push(a);
   }
   return { positional, flags };
@@ -25,19 +29,29 @@ function help() {
   console.log(`${c.bold('gloop')} — parallel loop-engineering for Claude Code + gstack
 
 Usage:
-  gloop init                          scaffold loops.json from repos in this workspace
+  gloop init [--print-conventions]    scaffold loops.json + REVIEW.md; safe to re-run
   gloop new <slug> [--repos a,b]      create paired worktrees + wired ports on feat/<slug>
   gloop ls                            list active loops (branch, ports, servers, PRs)
   gloop run <slug> --mode <m>         drive the loop (m: interactive | bypass | autonomous)
-       [--dry-run] [--no-servers] [--fix-cycles N]
+       [--dry-run] [--no-servers] [--fix-cycles N] [--legacy-driver]
   gloop stop <slug>                   stop the loop's dev servers
+  gloop risk [slug]                   list sensitive files the loop touches (slug optional in a worktree)
   gloop drop <slug> [--force] [--delete-branch] [--if-merged]
-  gloop reap                          drop every loop whose PR has merged
+  gloop reap                          drop every loop whose PR has merged; record merges,
+                                      re-check recent merges for reverts
+  gloop stats [--json] [--refresh]    outcomes, where runs block, cycles-to-pass, revert rate
 
 Modes:
   interactive   you drive an in-session loop, permission prompts on
   bypass        headless, auto-edits, stops before push for your approval
   autonomous    headless, end-to-end from SPEC.md, opens a ready-for-review PR
+
+Headless runs are a stage runner: build → fresh-context review ⇄ fix → security review
+⇄ fix → qa → build gate → proof check → risk → ship. Each stage is its own agent process;
+reviewers are read-only, and only an autonomous ship may push. A change that touches
+review.sensitivePaths stops before push even in autonomous mode.
+Evidence lands in .loops/runs/<slug>/latest; every run appends to .loops/history.json.
+Exit code 1 when a run ends BLOCKED.
 `);
 }
 
@@ -47,13 +61,19 @@ async function main() {
   const slug = positional[0];
   try {
     switch (cmd) {
-      case 'init': return require('../commands/init')();
+      case 'init': return require('../commands/init')(flags);
       case 'new': return require('../commands/new')(slug, flags);
       case 'ls': return await require('../commands/ls')();
-      case 'run': return await require('../commands/run')(slug, flags);
+      case 'run': {
+        const outcome = await require('../commands/run')(slug, flags);
+        if (outcome === 'blocked') process.exitCode = 1;
+        return outcome;
+      }
       case 'stop': return require('../commands/stop')(slug);
+      case 'risk': return require('../commands/risk')(slug);
       case 'drop': return require('../commands/drop')(slug, flags);
       case 'reap': return require('../commands/reap')();
+      case 'stats': return require('../commands/stats')(flags);
       case 'help': case '--help': case '-h': case undefined: return help();
       default:
         console.error(c.red(`Unknown command "${cmd}".`));

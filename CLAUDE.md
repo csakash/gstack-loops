@@ -4,18 +4,23 @@ Distributable multi-repo loop-engineering harness for Claude Code + gstack. Ship
 CLI + `/loop-*` slash commands that run parallel feature loops (`/spec → build → /review →
 /qa → /ship`) in isolated git worktrees across one or many repos.
 
-See [SPEC.md](SPEC.md) for the v1 design and acceptance criteria.
+See [SPEC.md](SPEC.md) for the current loop spec (v1.1 review layers) and
+[docs/SPEC-v1.md](docs/SPEC-v1.md) for the v1 design and acceptance criteria.
 
 ## Layout
 
 ```
 bin/gloop            CLI entry (subcommand dispatch)
-lib/                 config, registry, ports, env-template, worktree, proc, gh, driver
-commands/            init | new | ls | run | stop | drop | reap
+lib/                 config, registry, ports, env-template, worktree, proc, gh,
+                     driver (agent-specific), pipeline (stage runner), review, rules,
+                     history, outcomes, risk
+commands/            init | new | ls | run | stop | risk | drop | reap | stats
 skills/loop-*/       slash commands (registered by ./setup)
-templates/loops.json gloop init scaffold
+templates/           loops.json + REVIEW.md scaffolds (gloop init), branch-protection.md (setup --team)
 test/                node:test suites
-docs/                PARALLEL_SHIPPING.md
+test/fixtures/       fake `claude` (bin/) and fake `gh` (gh-bin/) the tests put on PATH
+test/e2e/            real-agent end-to-end harness: mock two-repo app, mock GitHub (see its README)
+docs/                REVIEW_LAYERS.md, PARALLEL_SHIPPING.md, SPEC-v1.md
 setup                installer
 ```
 
@@ -30,8 +35,23 @@ setup                installer
 - The CLI must degrade gracefully when `gh`/`claude` are absent (features that need them say
   so; nothing crashes).
 - `.env` files are seeded into worktrees and must never be committed (see `.gitignore`).
-- The headless driver builds a prompt string; keep the pipeline + hard rules in
-  `lib/driver.js` in sync with the `/loop-run` skill body.
+- Headless runs go through the stage runner in `lib/pipeline.js`; it enforces the rules
+  (fresh-context read-only reviewer, convergence, proof, never ship red) in code.
+- The rules themselves live once, in `lib/rules.js`. The driver quotes them in every author
+  prompt and `/gloop-build` lists them verbatim; `test/rules.test.js` fails on drift. Change a
+  rule there, then paste it into the skill.
+- **The owner's workflow is `/gloop-spec` → `/gloop-build` → `/gloop-ship`.** Keep those three
+  commands' names, order and jobs; improve them by adding checks inside, never by adding a
+  question for the user. `test/workflow.test.js` pins this; if a change needs it to fail, the
+  change is wrong.
+- Only an autonomous `ship` stage may push. Every other stage is push-guarded in
+  `lib/driver.js` (deny rule + git env) and `lib/pipeline.js` (tracking-ref check).
+- Anything that talks to GitHub goes through `lib/gh.js` and must return null, not throw,
+  when `gh` is missing. Tests use the fake `gh` in `test/fixtures/gh-bin/`; none touch GitHub.
+- Before a release, run the real-agent end-to-end harness in `test/e2e/` (not part of
+  `npm test`: it costs tokens). Every defect it finds gets a regression test in `npm test`.
+- Pipeline tests use the fake `claude` in `test/fixtures/bin/`. Add a failure scenario there
+  for every new way a stage can lie or half-finish, before its happy path.
 
 ## Supported agents
 
