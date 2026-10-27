@@ -155,6 +155,7 @@ gloop new <slug> [--repos a,b]          create the loop's branch + worktree(s) +
 gloop ls                                list loops: branch, ports, servers, PR state
 gloop run <slug> --mode <m> [--dry-run] drive the loop (m: interactive|bypass|autonomous)
 gloop stop <slug>                       stop the loop's dev servers
+gloop risk [slug]                       list sensitive files a loop touches (CI, auth, billing, …)
 gloop drop <slug> [--delete-branch]     tear down a loop (refuses if unmerged; --force to override)
 gloop reap                              drop every loop whose PR has merged
 ```

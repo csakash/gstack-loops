@@ -2,7 +2,31 @@
 const fs = require('fs');
 const path = require('path');
 const { CONFIG_NAME } = require('../lib/config');
-const { run, c, die } = require('../lib/util');
+const { DEFAULT_SENSITIVE } = require('../lib/risk');
+const { run, c, die, readJSON } = require('../lib/util');
+
+const REVIEW_TEMPLATE = path.join(__dirname, '..', 'templates', 'REVIEW.md');
+
+// One REVIEW.md per repo root, only where none exists: the file is the owner's to edit.
+function writeReviewGuides(root, repos) {
+  const created = [];
+  for (const r of repos) {
+    const dir = path.resolve(root, r.path || r.name);
+    const file = path.join(dir, 'REVIEW.md');
+    if (!fs.existsSync(dir) || fs.existsSync(file)) continue;
+    fs.copyFileSync(REVIEW_TEMPLATE, file);
+    created.push(path.relative(root, file) || 'REVIEW.md');
+  }
+  return created;
+}
+
+function reportGuides(created) {
+  if (created.length) {
+    console.log(`${c.green('✓')} wrote ${created.join(', ')} — tell the reviewer what matters in each repo, then commit it there`);
+  } else {
+    console.log(c.dim('  every repo already has a REVIEW.md — left as is.'));
+  }
+}
 
 // The conventions block written into the workspace CLAUDE.md so every Claude Code
 // session in this workspace follows the same loop + gstack best practices.
@@ -58,7 +82,20 @@ function detectRepos(root) {
 module.exports = function initCmd() {
   const root = process.cwd();
   const target = path.join(root, CONFIG_NAME);
-  if (fs.existsSync(target)) die(`${CONFIG_NAME} already exists here. Edit it directly.`);
+
+  // Safe to re-run: an existing workspace keeps its loops.json byte-for-byte and only gets
+  // what is missing. This is how workspaces made before v1.1 adopt REVIEW.md.
+  if (fs.existsSync(target)) {
+    let existing;
+    try { existing = readJSON(target, {}); } catch (e) { die(`${CONFIG_NAME} is not valid JSON: ${e.message}`); }
+    const repos = Array.isArray(existing.repos) ? existing.repos : [];
+    console.log(c.dim(`  ${CONFIG_NAME} already exists — left unchanged.`));
+    reportGuides(writeReviewGuides(root, repos));
+    const outcome = writeConventions(root, repos.map((r) => r.name));
+    if (outcome !== 'present') console.log(`${c.green('✓')} ${outcome} gstack-loops conventions in CLAUDE.md`);
+    if (!existing.review) console.log(c.dim('  no "review" block in loops.json: defaults apply (security review on, default sensitivePaths).'));
+    return;
+  }
 
   const found = detectRepos(root);
   if (found.length === 0) die('No git repos found here. Run this in a workspace containing one or more git repos.');
@@ -72,7 +109,11 @@ module.exports = function initCmd() {
     env: {},
   }));
 
-  const cfg = { worktreeDir: 'worktrees', branchPrefix: 'feat/', portStride: 100, repos, hooks: { preLoop: null, postShip: null } };
+  const cfg = {
+    worktreeDir: 'worktrees', branchPrefix: 'feat/', portStride: 100, repos,
+    review: { fixCycles: 2, security: true, sensitivePaths: DEFAULT_SENSITIVE },
+    hooks: { preLoop: null, postShip: null },
+  };
   fs.writeFileSync(target, JSON.stringify(cfg, null, 2) + '\n');
   console.log(`${c.green('✓')} wrote ${CONFIG_NAME} with ${repos.length} repo(s): ${repos.map((r) => r.name).join(', ')}`);
 
@@ -81,6 +122,8 @@ module.exports = function initCmd() {
   if (outcome === 'present') console.log(c.dim('  CLAUDE.md already has a gstack-loops section — left as is.'));
   else console.log(`${c.green('✓')} ${outcome} gstack-loops conventions in CLAUDE.md (loop rules + Definition of Done)`);
 
+  reportGuides(writeReviewGuides(root, repos));
+
   console.log(c.dim('  Next: set each repo\'s dev command + env wiring (e.g. {{url:backend}}), then: gloop new <slug>'));
-  console.log(c.dim('  Commit loops.json + CLAUDE.md so teammates inherit the setup.'));
+  console.log(c.dim('  Commit loops.json + CLAUDE.md (+ each repo\'s REVIEW.md) so teammates inherit the setup.'));
 };

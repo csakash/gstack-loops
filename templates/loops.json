@@ -21,6 +21,17 @@
       "env": { "VITE_API_URL": "{{url:backend}}" }
     }
   ],
+  "review": {
+    "fixCycles": 2,
+    "security": true,
+    "sensitivePaths": [
+      ".github/workflows/**", ".gitlab-ci.yml", ".circleci/**", "Jenkinsfile",
+      "CODEOWNERS", ".github/CODEOWNERS",
+      "**/auth/**", "**/billing/**", "**/payments/**",
+      "**/migrations/**",
+      "setup", "**/install*"
+    ]
+  },
   "hooks": {
     "preLoop": null,
     "postShip": null

@@ -1,6 +1,6 @@
 ---
 title: gstack-loops v1.1 — review layers: proof, fresh-context review, convergence, risk tiers, feedback
-status: P0 built; P1, P2 ready-to-build
+status: P0 + P1 built; P2 ready-to-build
 owner: csakash
 depends_on: gstack-loops v1 (docs/SPEC-v1.md), gstack (/review, /qa, /ship), Claude Code (/security-review)
 supports: Claude Code only
@@ -250,6 +250,87 @@ commands; verified against the real CLI, a headless `acceptEdits` session could 
      the run ends `BLOCKED: push-guard`. Catches the pushurl case after the fact (the branch
      reached the remote, but no PR was opened and the run stops).
 
+## P1 plan (2026-10-27)
+
+### Workflow contract (must not break)
+
+The owner's daily workflow is three slash commands: **`/gloop-spec` → `/gloop-build` →
+`/gloop-ship`**. P1 keeps their names, their order, what each one is for, and what the user types.
+P1 only *adds* checks inside them, and none of the additions asks the user a new question:
+
+| Command | Stays | P1 adds |
+|---|---|---|
+| `/gloop-spec` | interview → commit `SPEC.md` → "next: `/gloop-build`" | nothing |
+| `/gloop-build` | implement → review → QA → build gate; never pushes; "next: `/gloop-ship`" | a security review step after review; reads `REVIEW.md`; notes sensitive paths in `PROOF.md` |
+| `/gloop-ship` | `/ship` → PR per repo → `gloop stop` | runs `gloop risk`; if sensitive paths were touched, says so in the PR body and to the user. **Does not block or ask.** |
+
+A test (`test/workflow.test.js`) pins these invariants so a later change cannot quietly break them.
+
+### Decisions and deviations from the original P1 design
+
+1. **Security review uses gloop's own security-reviewer prompt**, not Claude Code's
+   `/security-review`. The reviewer has no shell (see P0), and `/security-review` needs one to
+   read the branch. Same findings contract as review (`important` = an exploitable
+   vulnerability this change introduces; `nit`, `pre-existing` never block), ids `s<cycle>-NN`,
+   output in `security/`. AC12 ("skipped when `/security-review` is unavailable") becomes:
+   `"review": {"security": false}` in `loops.json` turns the stage off and the run records it as
+   skipped.
+2. **Security has its own fix budget** (`fixCycles`, same number), so a long review cannot starve
+   it. Security fixes get a diff-only *security* re-review; QA runs after both, so a functional
+   regression from a security fix is still exercised.
+3. **Code changed during QA gets both a diff-only review and a diff-only security review.**
+4. **Interactive `/gloop-ship` warns, it does not block,** on sensitive paths: the person running
+   it is the human the article asks for. Only autonomous mode stops before push on them.
+5. **New `gloop risk [slug]`** prints the sensitive files a loop touches. The pipeline's risk stage
+   and the `/gloop-build` and `/gloop-ship` skills share it, so there is one definition of
+   "sensitive".
+6. **Default `sensitivePaths`** applies when `loops.json` has none, so existing workspaces get it
+   without editing config (opt out with `[]`). Revised list: CI (`.github/workflows/**`,
+   `.gitlab-ci.yml`, `.circleci/**`, `Jenkinsfile`), ownership (`CODEOWNERS`, `.github/CODEOWNERS`),
+   `**/auth/**`, `**/billing/**`, `**/payments/**`, `**/migrations/**`, installers (`setup`,
+   `**/install*`). Dropped `**/*.yml`: it stops the loop on every config edit.
+7. **`gloop init` is safe to re-run.** In a workspace that already has `loops.json` it leaves the
+   file alone and only adds what is missing (`REVIEW.md` per repo, the CLAUDE.md section). That is
+   how existing workspaces adopt P1.
+8. **`REVIEW.md` reaches the reviewer even before it is committed.** The reviewer reads the
+   worktree's copy; if the worktree has none, the driver copies the root checkout's copy into the
+   run dir and points the reviewer at it.
+
+### P1 as built (2026-10-27)
+
+Status: **built**, 82 tests green, all P1 criteria above met. Verified against the real CLI:
+the security reviewer, read-only, flagged a planted shell injection as one `important` finding
+at the right file and line, returned "no issues" on a harmless change, and left both repos
+untouched. Both replies passed the strict findings validation.
+
+- Workflow contract holds: `/gloop-spec` is unchanged; `/gloop-build` and `/gloop-ship` only
+  gained steps; `test/workflow.test.js` was checked by deliberately breaking `/gloop-ship`
+  (adding a confirmation question, calling a non-existent command) and seeing it fail.
+- Evidence per run gains `security/` (diffs, raw replies, findings, resolutions), `risk.json`,
+  `guides/` (REVIEW.md copies) and `proof/PR_BODY.md` (PROOF.md + sensitive paths, used as the
+  PR body whenever the run stops before push).
+- History records gain `cycles.securityFix`, `securityFindings` (null when security is off) and
+  `sensitive` (`repo/file` list).
+
+### P1 stage order (headless)
+
+```
+build → review ⇄ fix → security ⇄ secfix → qa → [review, security on qa's commits]
+      → buildgate → proof → risk → ship | stop before push (bypass, or autonomous + sensitive)
+```
+
+### P1 acceptance criteria (in addition to 11–18 above)
+
+- P1-1 Security findings follow the review contract; an open important one ends the run
+  `BLOCKED: security review did not converge …`; a reviewer that edits the tree or returns invalid
+  JSON blocks exactly as in review.
+- P1-2 `review.security: false` skips the stage and records `security: skipped` in `status.json`.
+- P1-3 `gloop risk` lists `repo: file` for every touched file matching `sensitivePaths`, or says
+  none; it never needs `gh` or `claude`.
+- P1-4 Re-running `gloop init` in a configured workspace leaves `loops.json` byte-identical and adds
+  only missing `REVIEW.md` files.
+- P1-5 `test/workflow.test.js` passes: the three commands keep their names, order, and roles.
+
 ## Phases
 
 **P0 — backbone (land first).** Stage runner; author/reviewer processes; findings + resolution
@@ -357,8 +438,10 @@ everything; loops remain ordinary branches and worktrees.
 | `lib/pipeline.js` | **new** (P0) — agent-agnostic stage runner: contracts, convergence, tree-unchanged check, build gate, proof check, history record, dry-run plan |
 | `lib/rules.js` | **new** — shared hard-rule strings used by prompts and asserted in skills |
 | `lib/review.js` | **new** — findings/resolution schema validation, blocking decision, diff ranges |
-| `lib/risk.js` | **new** — zero-dep glob matcher + sensitive-path check |
-| `lib/history.js` | **new** — append/update `.loops/history.json`; stats aggregation |
+| `lib/risk.js` | **new** (P1) — zero-dep glob matcher, default sensitive list, sensitive-path check |
+| `commands/risk.js` | **new** (P1) — `gloop risk [slug]`, shared by the risk stage and the skills |
+| `test/p1.test.js`, `test/workflow.test.js` | **new** (P1) — matcher, config, `gloop risk`, re-runnable init; the three-command workflow contract |
+| `lib/history.js` | **new** (P0) — append `.loops/history.json`; update + stats aggregation in P2 |
 | `lib/config.js` | `review.fixCycles`, `review.sensitivePaths` defaults |
 | `commands/run.js` | drive the stage runner; `needs-human` outcome; per-stage dry-run |
 | `commands/init.js` | `REVIEW.md` scaffold; `sensitivePaths` default; updated CLAUDE.md conventions |

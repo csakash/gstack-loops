@@ -67,11 +67,14 @@ async function scenario(scen, opts = {}) {
   fs.writeFileSync(path.join(root, 'loops.json'), JSON.stringify({
     portStride: 100,
     repos: [{ name: 'svc', path: 'svc', basePort: 4000, dev: ['npm', 'run', 'dev'], env: {} }],
+    ...(opts.review ? { review: opts.review } : {}),
   }));
+  if (opts.rootReviewMd) fs.writeFileSync(path.join(repo, 'REVIEW.md'), opts.rootReviewMd);
 
   const scenFile = path.join(root, 'scenario.json');
   const logFile = path.join(root, 'calls.log');
-  fs.writeFileSync(scenFile, JSON.stringify(scen));
+  // Security review runs by default; a scenario that does not script it gets a clean one.
+  fs.writeFileSync(scenFile, JSON.stringify({ security: S.clean, ...scen }));
   process.env.FAKE_CLAUDE_SCENARIO = scenFile;
   process.env.FAKE_CLAUDE_LOG = logFile;
 
@@ -83,7 +86,7 @@ async function scenario(scen, opts = {}) {
     newCmd('demo', {});
     console.log = quietLog;
     fs.writeFileSync(path.join(root, 'worktrees', 'demo', 'svc', 'SPEC.md'), '# spec\nbuild feature.js\n');
-    const { remote: _remote, ...runOpts } = opts;
+    const { remote: _remote, review: _review, rootReviewMd: _md, ...runOpts } = opts;
     const outcome = await runCmd('demo', { mode: 'bypass', noServers: true, quiet: true, ...runOpts });
     const cfg = loadConfig(root);
     const calls = fs.existsSync(logFile)
@@ -114,7 +117,7 @@ test('review that never converges ends BLOCKED after the fix budget, naming the 
     assert.equal(r.run.blockedGate, 'review');
     assert.match(r.run.reason, /did not converge after 1 cycles — re-evaluate the approach/);
     assert.match(r.run.reason, /r1-01 \(reported again in cycle 2\)/);
-    assert.deepEqual(r.run.cycles, { review: 2, fix: 1, security: 0 });
+    assert.deepEqual(r.run.cycles, { review: 2, fix: 1, security: 0, securityFix: 0 });
     assert.equal(r.loop.status, 'blocked');
   } finally { cleanup(r); }
 });
@@ -162,7 +165,7 @@ test('a reviewer that modifies the tree ends BLOCKED, whatever it reports', asyn
   try {
     assert.equal(r.outcome, 'blocked');
     assert.equal(r.run.blockedGate, 'reviewer-modified-tree');
-    assert.match(r.run.reason, /reviewer modified tree in svc/);
+    assert.match(r.run.reason, /review modified tree in svc/);
   } finally { cleanup(r); }
 });
 
@@ -195,7 +198,7 @@ test('build without test output ends BLOCKED: no proof', async () => {
 test('missing PROOF.md is caught before ship', async () => {
   const r = await scenario({ build: without(S.build, 'PROOF.md'), review: S.clean, qa: S.qa });
   try {
-    assert.deepEqual(r.keys, ['build', 'review:1', 'qa']);
+    assert.deepEqual(r.keys, ['build', 'review:1', 'security:1', 'qa']);
     assert.equal(r.run.blockedGate, 'proof');
     assert.match(r.run.reason, /no proof: proof\/PROOF\.md missing/);
   } finally { cleanup(r); }
@@ -257,13 +260,105 @@ test('autonomous ship is the one stage allowed to push', async () => {
   } finally { cleanup(r); }
 });
 
+// ---- P1: security review ---------------------------------------------------------
+
+const VULN = { id: 's1-01', severity: 'important', class: 'shell injection from request input', file: 'svc/feature.js', line: 1, summary: 'req.query.name reaches exec()', fix_hint: 'use execFile with an argv array' };
+const S_VULN = [{ stdout: { summary: '1 issue (1 important)', findings: [VULN] } }];
+const S_SECFIX = [
+  { commit: { repo: 'svc' } },
+  { write: '$RUN/security/fix-$CYCLE.resolutions.json', content: { 's1-01': { status: 'fixed', reason: 'execFile with argv' } } },
+];
+
+test('security review that never converges ends BLOCKED at the security gate', async () => {
+  const r = await scenario({ build: S.build, review: S.clean, security: S_VULN, secfix: S_SECFIX, qa: S.qa }, { fixCycles: 1 });
+  try {
+    assert.equal(r.outcome, 'blocked');
+    assert.deepEqual(r.keys, ['build', 'review:1', 'security:1', 'secfix:1', 'security:2']);
+    assert.equal(r.run.blockedGate, 'security');
+    assert.match(r.run.reason, /security review did not converge after 1 cycles — re-evaluate the approach\. Open: s1-01/);
+    assert.deepEqual(r.run.cycles, { review: 1, fix: 0, security: 2, securityFix: 1 });
+  } finally { cleanup(r); }
+});
+
+test('a security reviewer that edits the tree, or returns junk, blocks like the reviewer', async () => {
+  const edits = await scenario({ build: S.build, review: S.clean, security: [{ write: 'svc/patched.js', content: 'x' }, ...S.clean], qa: S.qa });
+  const junk = await scenario({ build: S.build, review: S.clean, security: [{ stdout: 'All secure.' }], qa: S.qa });
+  try {
+    assert.equal(edits.run.blockedGate, 'reviewer-modified-tree');
+    assert.match(edits.run.reason, /security review modified tree in svc/);
+    assert.equal(junk.run.blockedGate, 'security');
+    assert.match(junk.run.reason, /security review output invalid/);
+  } finally { cleanup(edits); cleanup(junk); }
+});
+
+test('security fixes get a security re-review of only the fix commits, with their own budget', async () => {
+  const r = await scenario({ build: S.build, review: S.clean, 'security:1': S_VULN, secfix: S_SECFIX, 'security:2': S.clean, qa: S.qa });
+  try {
+    assert.equal(r.outcome, 'needs-human');
+    assert.deepEqual(r.keys, ['build', 'review:1', 'security:1', 'secfix:1', 'security:2', 'qa']);
+    assert.match(r.calls[2].args[1], /fresh-context SECURITY REVIEWER/);
+    assert.match(r.calls[3].args[1], /separate fresh-context security reviewer/);
+    assert.match(r.calls[4].args[1], /svc: [0-9a-f]{40}\.\.HEAD/);
+    assert.deepEqual(r.run.securityFindings, { important: 1, nit: 0, 'pre-existing': 0, fixed: 1, wontfix: 0 });
+  } finally { cleanup(r); }
+});
+
+test('review.security: false skips the stage and says so', async () => {
+  const r = await scenario({ build: S.build, review: S.clean, qa: S.qa }, { review: { security: false } });
+  try {
+    assert.equal(r.outcome, 'needs-human');
+    assert.deepEqual(r.keys, ['build', 'review:1', 'qa']);
+    assert.equal(r.run.securityFindings, null);
+    const status = JSON.parse(fs.readFileSync(path.join(r.root, r.run.runDir, 'status.json'), 'utf8'));
+    assert.ok(status.stages.some((st) => st.stage === 'security' && st.status === 'skipped'));
+  } finally { cleanup(r); }
+});
+
+// ---- P1: risk tiers --------------------------------------------------------------
+
+const S_BUILD_CI = [{ commit: { repo: 'svc', file: '.github/workflows/ci.yml', content: 'on: push\n' } }, ...S.build];
+const S_SHIP = [{ write: '$RUN/stage-ship.json', content: { status: 'ok', prs: { svc: 'https://github.com/o/svc/pull/9' } } }];
+
+test('autonomous run that touches a sensitive path stops before push and names the file', async () => {
+  const r = await scenario({ build: S_BUILD_CI, review: S.clean, qa: S.qa, ship: S_SHIP }, { mode: 'autonomous' });
+  try {
+    assert.equal(r.outcome, 'needs-human');
+    assert.ok(!r.keys.includes('ship'), 'the ship agent never ran');
+    assert.match(r.run.reason, /touched sensitive paths: svc\/\.github\/workflows\/ci\.yml; a human must review before push/);
+    assert.deepEqual(r.run.sensitive, ['svc/.github/workflows/ci.yml']);
+    assert.equal(r.loop.status, 'needs-human');
+    assert.match(r.loop.reason, /touched sensitive paths/);
+    const body = fs.readFileSync(path.join(r.root, r.run.runDir, 'proof', 'PR_BODY.md'), 'utf8');
+    assert.match(body, /## Testing[\s\S]*## Sensitive paths[\s\S]*`\.github\/workflows\/ci\.yml`/);
+  } finally { cleanup(r); }
+});
+
+test('bypass reports sensitive paths too; sensitivePaths: [] opts out', async () => {
+  const bypass = await scenario({ build: S_BUILD_CI, review: S.clean, qa: S.qa });
+  const optOut = await scenario({ build: S_BUILD_CI, review: S.clean, qa: S.qa, ship: S_SHIP }, { mode: 'autonomous', review: { sensitivePaths: [] } });
+  try {
+    assert.match(bypass.run.reason, /bypass mode: review the branch, then push\. Touches sensitive paths: svc\/\.github\/workflows\/ci\.yml/);
+    assert.equal(optOut.outcome, 'shipped');
+    assert.deepEqual(optOut.run.sensitive, []);
+  } finally { cleanup(bypass); cleanup(optOut); }
+});
+
+test('an uncommitted REVIEW.md in the root checkout still reaches both reviewers', async () => {
+  const r = await scenario({ build: S.build, review: S.clean, qa: S.qa }, { rootReviewMd: '# REVIEW.md\nNever log tokens.\n' });
+  try {
+    const copy = path.join(r.root, r.run.runDir, 'guides', 'svc.REVIEW.md');
+    assert.equal(fs.readFileSync(copy, 'utf8'), '# REVIEW.md\nNever log tokens.\n');
+    for (const i of [1, 2]) assert.ok(r.calls[i].args[1].includes(`svc: ${copy}`), `${r.keys[i]} prompt points at the guide`);
+  } finally { cleanup(r); }
+});
+
 // ---- happy paths -----------------------------------------------------------------
 
 test('clean run: build and review are separate processes; reviewer is read-only; bypass stops before push', async () => {
   const r = await scenario({ build: S.build, review: S.clean, qa: S.qa });
   try {
     assert.equal(r.outcome, 'needs-human');
-    assert.deepEqual(r.keys, ['build', 'review:1', 'qa']);
+    assert.deepEqual(r.keys, ['build', 'review:1', 'security:1', 'qa']);
     const [build, rev] = r.calls;
     assert.deepEqual(build.args.slice(2, 4), ['--permission-mode', 'acceptEdits']);
     assert.deepEqual(rev.args.slice(2, 4), ['--permission-mode', 'default']);
@@ -278,7 +373,7 @@ test('clean run: build and review are separate processes; reviewer is read-only;
     assert.equal(r.loop.status, 'needs-human');
     assert.equal(r.runs.length, 1, 'exactly one history record');
     assert.equal(r.run.outcome, 'needs-human');
-    assert.deepEqual(r.run.cycles, { review: 1, fix: 0, security: 0 });
+    assert.deepEqual(r.run.cycles, { review: 1, fix: 0, security: 1, securityFix: 0 });
     assert.ok(fs.existsSync(path.join(r.root, r.run.runDir, 'proof', 'build-svc.txt')), 'build gate leaves proof even when skipped');
     assert.ok(fs.existsSync(path.join(r.root, '.loops', 'runs', 'demo', 'latest')));
     assert.equal(git(path.join(r.root, 'worktrees', 'demo', 'svc'), 'log', '--oneline', 'main..HEAD').split('\n').length, 1);
@@ -289,7 +384,7 @@ test('converge in two: re-review sees only the fix commits and is told not to re
   const r = await scenario({ build: S.build, 'review:1': S.important, 'fix:1': S.fixCommit, 'review:2': S.clean, qa: S.qa });
   try {
     assert.equal(r.outcome, 'needs-human');
-    assert.deepEqual(r.keys, ['build', 'review:1', 'fix:1', 'review:2', 'qa']);
+    assert.deepEqual(r.keys, ['build', 'review:1', 'fix:1', 'review:2', 'security:1', 'qa']);
     const rev2 = r.calls[3].args[1];
     const m = rev2.match(/svc: [0-9a-f]{40}\.\.HEAD {2}-> {2}(\S+cycle-2\.svc\.diff)/);
     assert.ok(m, 'cycle 2 reviews only the fix commits');
@@ -306,7 +401,7 @@ test('nits and pre-existing findings never trigger a fix cycle', async () => {
   const r = await scenario({ build: S.build, review: soft, qa: S.qa });
   try {
     assert.equal(r.outcome, 'needs-human');
-    assert.deepEqual(r.keys, ['build', 'review:1', 'qa']);
+    assert.deepEqual(r.keys, ['build', 'review:1', 'security:1', 'qa']);
     assert.equal(r.run.findings.nit, 1);
     assert.equal(r.run.findings['pre-existing'], 1);
   } finally { cleanup(r); }
@@ -317,7 +412,7 @@ test('"wontfix" with a reason resolves without another review cycle', async () =
   const r = await scenario({ build: S.build, 'review:1': S.important, fix: why, qa: S.qa });
   try {
     assert.equal(r.outcome, 'needs-human');
-    assert.deepEqual(r.keys, ['build', 'review:1', 'fix:1', 'qa']);
+    assert.deepEqual(r.keys, ['build', 'review:1', 'fix:1', 'security:1', 'qa']);
     assert.equal(r.run.findings.wontfix, 1);
   } finally { cleanup(r); }
 });
@@ -327,8 +422,9 @@ test('code changed during qa gets a diff-only review', async () => {
   const r = await scenario({ build: S.build, review: S.clean, qa: qaFix });
   try {
     assert.equal(r.outcome, 'needs-human');
-    assert.deepEqual(r.keys, ['build', 'review:1', 'qa', 'review:2']);
-    const m = r.calls[3].args[1].match(/svc: [0-9a-f]{40}\.\.HEAD {2}-> {2}(\S+cycle-2\.svc\.diff)/);
+    assert.deepEqual(r.keys, ['build', 'review:1', 'security:1', 'qa', 'review:2', 'security:2']);
+    assert.match(r.calls[5].args[1], /svc: [0-9a-f]{40}\.\.HEAD/, 'security also re-checks only the qa commits');
+    const m = r.calls[4].args[1].match(/svc: [0-9a-f]{40}\.\.HEAD {2}-> {2}(\S+cycle-2\.svc\.diff)/);
     assert.ok(m);
     assert.match(fs.readFileSync(m[1], 'utf8'), /qa-fix\.js/);
     assert.doesNotMatch(fs.readFileSync(m[1], 'utf8'), /feature\.js/);
@@ -340,10 +436,10 @@ test('autonomous ship: PROOF.md goes in the PR body; PR URLs recorded', async ()
   const r = await scenario({ build: S.build, review: S.clean, qa: S.qa, ship }, { mode: 'autonomous' });
   try {
     assert.equal(r.outcome, 'shipped');
-    assert.deepEqual(r.keys, ['build', 'review:1', 'qa', 'ship']);
-    assert.match(r.calls[3].args[1], /PR body MUST contain \S+proof\/PROOF\.md verbatim/);
-    assert.deepEqual(r.calls[3].args.slice(2, 4), ['--permission-mode', 'bypassPermissions']);
-    assert.ok(!r.calls[3].args.includes('--disallowedTools'), 'only the autonomous ship stage may push');
+    assert.deepEqual(r.keys, ['build', 'review:1', 'security:1', 'qa', 'ship']);
+    assert.match(r.calls[4].args[1], /PR body MUST contain \S+proof\/PROOF\.md verbatim/);
+    assert.deepEqual(r.calls[4].args.slice(2, 4), ['--permission-mode', 'bypassPermissions']);
+    assert.ok(!r.calls[4].args.includes('--disallowedTools'), 'only the autonomous ship stage may push');
     assert.ok(r.calls[0].args.includes('--disallowedTools'), 'autonomous build may not push');
     assert.deepEqual(r.run.prs, { svc: 'https://github.com/o/svc/pull/7' });
     assert.equal(r.loop.status, 'shipped');
@@ -363,7 +459,7 @@ test('dry-run lists every stage with its prompt and spawns nothing', async () =>
     assert.deepEqual(r.calls, [], 'no agent process was spawned');
     assert.equal(r.runs.length, 0, 'no history record for a dry run');
     const order = lines.join('\n').match(/── \d+\. (\w+)/g).map((s) => s.replace(/── \d+\. /, ''));
-    assert.deepEqual(order, ['build', 'review', 'fix', 'review', 'qa', 'review', 'buildgate', 'proof', 'ship']);
+    assert.deepEqual(order, ['build', 'review', 'fix', 'review', 'security', 'secfix', 'security', 'qa', 'review', 'buildgate', 'proof', 'risk', 'ship']);
     assert.match(lines.join('\n'), /GLOOP-STAGE: review cycle=1/);
     assert.match(lines.join('\n'), /--disallowedTools Bash Edit Write NotebookEdit/);
     assert.ok(!fs.existsSync(path.join(r.root, '.loops', 'runs')), 'run dir not created');

@@ -1,10 +1,10 @@
 ---
 name: gloop-build
 description: |
-  Build the current loop's SPEC.md to green — implement it, then have a fresh-context
-  reviewer check the diff, fix until review converges, run /qa, and save proof of every
-  claim. Stops before shipping. Use after /gloop-spec, when you want the work done and
-  verified but not yet PR'd.
+  Build the current loop's SPEC.md to green — implement it, then have fresh-context
+  reviewers check the diff for bugs and for security holes, fix until both converge, run
+  /qa, and save proof of every claim. Stops before shipping. Use after /gloop-spec, when
+  you want the work done and verified but not yet PR'd.
 allowed-tools:
   - Bash
   - Read
@@ -46,17 +46,34 @@ the rules below are the same ones the driver enforces in `lib/pipeline.js`.
 - Budget: **2 fix rounds** by default. If `important` findings are still open after that, STOP:
   "review did not converge — re-evaluate the approach." Do not keep cycling.
 
-## 3. QA
+## 3. Security review — same rules, its own budget
+- Once review is clean, run a second **new-context subagent** as a security reviewer over the
+  whole branch diff, with the repo's `REVIEW.md`. It looks only for vulnerabilities this change
+  introduces (injection, missing auth checks, secrets in code or logs, unsafe eval or
+  deserialization, SSRF, XSS, crypto misuse, new dependencies or CI permissions), and reports
+  only what it can show is exploitable.
+- Same contract as review: `important` = an exploitable vulnerability this change introduces,
+  blocks; `nit` and `pre-existing` never block. Fix or `wontfix` with a reason; re-check only the
+  fix commits; **2 fix rounds**, then STOP: "security review did not converge."
+- Skip this step only if `loops.json` has `"review": {"security": false}`; say that you skipped it.
+
+## 4. QA
 - Invoke `/qa http://localhost:<port>`; fix every bug; re-run until clean. Save what you
   exercised and the result to `proof/qa.md` (screenshots under `proof/qa/`); update the Testing
   section of `PROOF.md`.
-- If QA changed code, run one more diff-only review of those commits (same budget).
+- If QA changed code, run one more diff-only review and security review of those commits
+  (same budgets).
 
-## 4. Build gate
+## 5. Build gate and risk
 - `npm run build` in each touched repo. Must pass. Save output to `proof/build-<repo>.txt`.
+- Run `gloop risk`. If it lists sensitive files (CI, auth, billing, migrations, installers…),
+  name them in the `## Risk` section of `PROOF.md`. This does not stop the build: `/gloop-ship`
+  flags them on the PR for a human reviewer.
 
 ## Outcome
-- Green: `PROOF.md` has all three sections, review converged, QA clean, build clean. Report
-  "ready to ship — run `/gloop-ship`." Leave the worktree as is; do not push.
-- **Never ship red:** if review does not converge within the budget, QA cannot reach clean, the
-  build fails, or proof is missing, STOP and report which gate failed and why.
+- Green: `PROOF.md` has all three sections, review and security review converged, QA clean,
+  build clean. Report "ready to ship — run `/gloop-ship`." Leave the worktree as is; do not
+  push.
+- **Never ship red:** if review or security review does not converge within the budget, QA
+  cannot reach clean, the build fails, or proof is missing, STOP and report which gate failed
+  and why.

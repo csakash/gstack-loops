@@ -13,6 +13,9 @@ fully autonomous.
 - **Modes.** `interactive` (you drive, prompts on), `bypass` (headless, auto-edits, stops
   before push for your approval), `autonomous` (headless, unattended, opens a ready-for-review
   PR from an approved `SPEC.md`).
+- **Review layers.** A separate read-only reviewer and security reviewer check every change,
+  fixes converge within a budget, every claim needs saved proof, and changes to sensitive paths
+  (CI, auth, billing, migrations) always wait for a human before push.
 - **Cleanup.** Stops dev servers when the loop finishes; removes the worktree once its PR merges.
 
 ## Install
@@ -35,6 +38,7 @@ gloop new attachment-previews           # paired worktrees + wired ports on feat
 # write SPEC.md in the worktree (via /spec), then:
 gloop run attachment-previews --mode interactive   # or bypass / autonomous
 gloop ls                                # see all loops: ports, servers, PR state
+gloop risk attachment-previews          # sensitive files it touches (CI, auth, billing, …)
 gloop reap                              # tear down loops whose PR has merged
 ```
 

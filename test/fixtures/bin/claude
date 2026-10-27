@@ -36,6 +36,7 @@ for (const s of steps) {
   if (s.commit) {
     const dir = path.resolve(s.commit.repo);
     const file = s.commit.file || `${key.replace(':', '-')}.txt`;
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
     fs.writeFileSync(path.join(dir, file), s.commit.content || `${key} ${Date.now()} ${Math.random()}\n`);
     execFileSync('git', ['-C', dir, 'add', file], { stdio: 'pipe' });
     execFileSync('git', ['-C', dir, 'commit', '-q', '-m', `fake ${key}`], { stdio: 'pipe' });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // gloop — loop-engineering CLI for Claude Code + gstack.
-// Subcommands: init | new | ls | run | stop | drop | reap | help
+// Subcommands: init | new | ls | run | stop | risk | drop | reap | help
 const { c } = require('../lib/util');
 
 function parse(argv) {
@@ -32,6 +32,7 @@ Usage:
   gloop run <slug> --mode <m>         drive the loop (m: interactive | bypass | autonomous)
        [--dry-run] [--no-servers] [--fix-cycles N] [--legacy-driver]
   gloop stop <slug>                   stop the loop's dev servers
+  gloop risk [slug]                   list sensitive files the loop touches (slug optional in a worktree)
   gloop drop <slug> [--force] [--delete-branch] [--if-merged]
   gloop reap                          drop every loop whose PR has merged
 
@@ -40,8 +41,10 @@ Modes:
   bypass        headless, auto-edits, stops before push for your approval
   autonomous    headless, end-to-end from SPEC.md, opens a ready-for-review PR
 
-Headless runs are a stage runner: build → fresh-context review ⇄ fix → qa → build gate
-→ proof check → ship. Each stage is its own agent process; the reviewer is read-only.
+Headless runs are a stage runner: build → fresh-context review ⇄ fix → security review
+⇄ fix → qa → build gate → proof check → risk → ship. Each stage is its own agent process;
+reviewers are read-only, and only an autonomous ship may push. A change that touches
+review.sensitivePaths stops before push even in autonomous mode.
 Evidence lands in .loops/runs/<slug>/latest; every run appends to .loops/history.json.
 Exit code 1 when a run ends BLOCKED.
 `);
@@ -62,6 +65,7 @@ async function main() {
         return outcome;
       }
       case 'stop': return require('../commands/stop')(slug);
+      case 'risk': return require('../commands/risk')(slug);
       case 'drop': return require('../commands/drop')(slug, flags);
       case 'reap': return require('../commands/reap')();
       case 'help': case '--help': case '-h': case undefined: return help();
