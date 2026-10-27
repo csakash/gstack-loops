@@ -3,7 +3,7 @@
 // Returns the outcome (shipped | needs-human | blocked | dry-run | handed-off) so the
 // CLI entry can set the exit code; never calls process.exit itself after validation.
 const path = require('path');
-const { loadConfig, repoByName } = require('../lib/config');
+const { loadConfig, repoByName, devCwd } = require('../lib/config');
 const registry = require('../lib/registry');
 const { portsForSlot } = require('../lib/ports');
 const { resolveEnvMap } = require('../lib/env-template');
@@ -22,7 +22,8 @@ function startServers(cfg, loop, log) {
     if (repo.serve && repo.serve.portFlag) args.push('--', repo.serve.portFlag, String(ports[name]), '--strictPort');
     const env = resolveEnvMap(repo.env, { selfPort: ports[name], portsByRepo: ports });
     const logFile = path.join(cfg.root, '.loops', 'logs', `${driver.loopSlug(loop) || 'loop'}-${name}.log`);
-    const s = startServer({ cwd: path.join(cfg.root, loop.worktrees[name]), command: repo.dev[0], args, env, port: ports[name], logFile });
+    const cwd = devCwd(repo, driver.featureDir(cfg, loop), path.join(cfg.root, loop.worktrees[name]));
+    const s = startServer({ cwd, command: repo.dev[0], args, env, port: ports[name], logFile });
     servers[name] = s;
     log(`  ${c.green('▸')} ${name} server → :${s.port} (pid ${s.pid}, log ${path.relative(cfg.root, logFile)})`);
   }
@@ -133,3 +134,6 @@ module.exports = async function runCmd(slug, opts = {}) {
   }
   return result.outcome;
 };
+
+module.exports.startServers = startServers;
+module.exports.stopServers = stopServers;

@@ -8,9 +8,13 @@ const wt = require('../lib/worktree');
 const { resolveEnvMap, applyEnv } = require('../lib/env-template');
 const { c, die, slugOk } = require('../lib/util');
 
+// launch.json runs from the feature folder (where a session for this loop is opened), the
+// same place `gloop run` starts servers. A single-repo workspace's repo sits one level down,
+// so npm gets a --prefix to reach it.
 function writeLaunchJson(featureDir, selected, ports) {
   const configurations = selected.map((r) => {
     const runtimeArgs = r.dev.slice(1);
+    if (r.path === '.' && r.dev[0] === 'npm' && !runtimeArgs.includes('--prefix')) runtimeArgs.push('--prefix', r.name);
     if (r.serve && r.serve.portFlag) runtimeArgs.push('--', r.serve.portFlag, String(ports[r.name]), '--strictPort');
     return { name: r.name, runtimeExecutable: r.dev[0], runtimeArgs, port: ports[r.name] };
   });

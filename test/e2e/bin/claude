@@ -1,0 +1,20 @@
+#!/usr/bin/env node
+// e2e claude wrapper. Passes every call to the real CLI ($E2E_REAL_CLAUDE), except the build
+// stage when $E2E_PLANT_BUILD names a script: then that script plays the author, so a known
+// defect lands in the diff and the *real* reviewer, fixer and re-reviewer are tested on it.
+const { spawnSync } = require('child_process');
+const fs = require('fs');
+
+const args = process.argv.slice(2);
+const prompt = args[args.indexOf('-p') + 1] || '';
+const stage = (prompt.match(/^GLOOP-STAGE: (\w+)/m) || [])[1];
+if (process.env.E2E_CLAUDE_LOG) fs.appendFileSync(process.env.E2E_CLAUDE_LOG, `${JSON.stringify({ at: new Date().toISOString(), stage: stage || null, cwd: process.cwd(), argv: args.map((a) => (a === prompt ? `<prompt ${prompt.length} chars>` : a)) })}\n`);
+
+let res;
+if (stage === 'build' && process.env.E2E_PLANT_BUILD) {
+  const runDir = (prompt.match(/^RUN DIR: (.+)$/m) || [])[1];
+  res = spawnSync(process.execPath, [process.env.E2E_PLANT_BUILD, runDir], { stdio: 'inherit' });
+} else {
+  res = spawnSync(process.env.E2E_REAL_CLAUDE || '/opt/node22/bin/claude', args, { stdio: 'inherit' });
+}
+process.exit(res.status ?? 1);

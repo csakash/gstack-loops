@@ -1,0 +1,116 @@
+#!/usr/bin/env node
+// Mock GitHub `gh` for the e2e run, backed by the local bare remotes. Realistic where it
+// matters to gloop: a PR needs the branch pushed first, `pr merge` does a real git merge into
+// the remote, `pr view`/`pr list` answer with the fields gloop reads. State: $E2E_GH_STATE.
+// Every call is logged to $E2E_GH_LOG as evidence.
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const args = process.argv.slice(2);
+const STATE = process.env.E2E_GH_STATE || path.join(os.tmpdir(), 'e2e-gh-state.json');
+if (process.env.E2E_GH_LOG) fs.appendFileSync(process.env.E2E_GH_LOG, `${JSON.stringify({ at: new Date().toISOString(), cwd: process.cwd(), args })}\n`);
+
+const git = (dir, ...a) => execFileSync('git', ['-C', dir, ...a], { stdio: 'pipe', encoding: 'utf8' }).trim();
+const load = () => (fs.existsSync(STATE) ? JSON.parse(fs.readFileSync(STATE, 'utf8')) : { next: 1, prs: [] });
+const save = (s) => fs.writeFileSync(STATE, JSON.stringify(s, null, 2));
+const flag = (name) => { const i = args.indexOf(name); return i > -1 ? args[i + 1] : undefined; };
+const die = (msg, code = 1) => { process.stderr.write(`${msg}\n`); process.exit(code); };
+
+function repoCtx() {
+  let remote;
+  try { remote = git(process.cwd(), 'remote', 'get-url', 'origin'); } catch { die('not a git repository with an origin remote'); }
+  const repo = path.basename(remote).replace(/\.git$/, '');
+  let branch = null;
+  try { branch = git(process.cwd(), 'rev-parse', '--abbrev-ref', 'HEAD'); } catch { /* detached */ }
+  return { remote, repo, branch };
+}
+
+function view(pr, fields) {
+  const all = {
+    number: pr.number, title: pr.title, body: pr.body, state: pr.state, url: pr.url,
+    headRefName: pr.head, baseRefName: pr.base, isDraft: !!pr.draft,
+    mergedAt: pr.mergedAt || null, mergeCommit: pr.mergeCommit ? { oid: pr.mergeCommit } : null,
+  };
+  if (!fields) return all;
+  return Object.fromEntries(fields.split(',').map((f) => [f, all[f] === undefined ? null : all[f]]));
+}
+
+function findPr(s, ctx, ref) {
+  const mine = s.prs.filter((p) => p.repo === ctx.repo);
+  if (ref && /^\d+$/.test(ref)) return mine.find((p) => p.number === Number(ref));
+  const head = ref || ctx.branch;
+  return mine.filter((p) => p.head === head).pop();
+}
+
+const [cmd, sub] = args;
+if (cmd === '--version') { console.log('gh version 2.0.0-mock (e2e)'); process.exit(0); }
+if (cmd === 'auth' && sub === 'status') { console.log('Logged in to github.example as mock-dev (e2e mock)'); process.exit(0); }
+if (cmd === 'repo' && sub === 'view') {
+  const ctx = repoCtx();
+  console.log(JSON.stringify({ name: ctx.repo, nameWithOwner: `mock/${ctx.repo}`, url: `https://github.example/mock/${ctx.repo}`, defaultBranchRef: { name: 'main' } }));
+  process.exit(0);
+}
+if (cmd !== 'pr') die(`gh mock: unsupported command: ${args.join(' ')}`, 2);
+
+const s = load();
+const ctx = repoCtx();
+
+if (sub === 'create') {
+  const head = flag('--head') || flag('-H') || ctx.branch;
+  const base = flag('--base') || flag('-B') || 'main';
+  const heads = git(process.cwd(), 'ls-remote', '--heads', 'origin', head);
+  if (!heads) die(`aborted: you must first push the current branch to a remote, or use the --head flag`);
+  if (findPr(s, ctx, head) && findPr(s, ctx, head).state === 'OPEN') die(`a pull request for branch "${head}" into branch "${base}" already exists`);
+  let body = flag('--body') || flag('-b') || '';
+  const bodyFile = flag('--body-file') || flag('-F');
+  if (bodyFile) body = fs.readFileSync(bodyFile, 'utf8');
+  const title = flag('--title') || flag('-t') || head;
+  const pr = { number: s.next++, repo: ctx.repo, remote: ctx.remote, head, base, title, body, draft: args.includes('--draft') || args.includes('-d'), state: 'OPEN', createdAt: new Date().toISOString() };
+  pr.url = `https://github.example/mock/${ctx.repo}/pull/${pr.number}`;
+  s.prs.push(pr);
+  save(s);
+  console.log(pr.url);
+  process.exit(0);
+}
+
+if (sub === 'view') {
+  const ref = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
+  const pr = findPr(s, ctx, ref);
+  if (!pr) die(`no pull requests found for branch "${ref || ctx.branch}"`);
+  console.log(JSON.stringify(view(pr, flag('--json'))));
+  process.exit(0);
+}
+
+if (sub === 'list') {
+  const state = (flag('--state') || 'open').toUpperCase();
+  const list = s.prs.filter((p) => p.repo === ctx.repo && (state === 'ALL' || p.state === state));
+  console.log(JSON.stringify(list.map((p) => view(p, flag('--json')))));
+  process.exit(0);
+}
+
+if (sub === 'merge') {
+  const ref = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
+  const pr = findPr(s, ctx, ref);
+  if (!pr) die('no pull request found');
+  if (pr.state !== 'OPEN') die(`pull request #${pr.number} is ${pr.state.toLowerCase()}`);
+  // A real merge commit on the remote's base branch, made in a scratch clone.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-merge-'));
+  execFileSync('git', ['clone', '-q', pr.remote, tmp], { stdio: 'pipe' });
+  git(tmp, 'config', 'user.email', 'github@mock.test');
+  git(tmp, 'config', 'user.name', 'GitHub (mock)');
+  git(tmp, 'checkout', '-q', pr.base);
+  git(tmp, 'merge', '--no-ff', '-q', `origin/${pr.head}`, '-m', `Merge pull request #${pr.number} from mock/${pr.head}\n\n${pr.title}`);
+  git(tmp, 'push', '-q', 'origin', pr.base);
+  pr.mergeCommit = git(tmp, 'rev-parse', 'HEAD');
+  pr.mergedAt = new Date().toISOString();
+  pr.state = 'MERGED';
+  fs.rmSync(tmp, { recursive: true, force: true });
+  save(s);
+  console.log(`✓ Merged pull request #${pr.number} (${pr.title})`);
+  process.exit(0);
+}
+
+if (sub === 'comment' || sub === 'edit') { console.log(`(mock) ${sub} ok`); process.exit(0); }
+die(`gh mock: unsupported: pr ${sub}`, 2);
