@@ -40,19 +40,26 @@ This workspace uses [gstack-loops](https://github.com/csakash/gstack-loops) on t
 sessions share these repos; an isolated worktree per loop is what stops them clobbering each
 other. Start each feature with \`gloop new <slug>\`, then work inside \`worktrees/<slug>/\`.
 
-The loop: \`/gloop-spec\` (commit \`SPEC.md\`) → \`/gloop-build\` (build → \`/review\` + \`/qa\`
-until green) → \`/gloop-ship\` (raise the PR). There's a \`/gloop-*\` shortcut for every step,
-or just \`/gloop <what you want>\` to drive it conversationally. For headless runs use
-\`gloop run <slug> --mode <interactive|bypass|autonomous>\`.
+The loop: \`/gloop-spec\` (commit \`SPEC.md\`) → \`/gloop-build\` (build → fresh-context review
+and security review → \`/qa\`, with proof) → \`/gloop-ship\` (raise the PR). There's a
+\`/gloop-*\` shortcut for every step, or just \`/gloop <what you want>\` to drive it
+conversationally. For headless runs use \`gloop run <slug> --mode <interactive|bypass|autonomous>\`.
 
 - Use \`/browse\` for all web browsing/QA — never \`mcp__claude-in-chrome__*\`.
-- Definition of Done: behavior matches \`SPEC.md\`; \`npm run build\` clean per repo; \`/review\`
-  + \`/qa\` pass; no \`.env\` committed; cross-repo PRs cross-linked.
+- Definition of Done: behavior matches \`SPEC.md\`; \`PROOF.md\` (Testing / Risk / How to revert)
+  is the PR body; \`npm run build\` clean per repo; review and security review converged, every
+  important finding fixed or closed with a reason; each repo's \`REVIEW.md\` followed; sensitive
+  paths flagged for a human reviewer (\`gloop risk\`); no \`.env\` committed; cross-repo PRs
+  cross-linked.
 - Landing several PRs at once: see [docs/PARALLEL_SHIPPING.md](docs/PARALLEL_SHIPPING.md)
   (shared-DB isolation via \`hooks.preLoop\`, merge order, rebase-before-ship).
-- After a loop's PR merges: \`gloop reap\` (or \`gloop drop <slug> --delete-branch\`).
+- After a loop's PR merges: \`gloop reap\` (records the merge, re-checks recent merges for
+  reverts). \`gloop stats\` shows how loops are doing.
 `;
 }
+
+// Sections written before the review layers have no PROOF.md in their Definition of Done.
+const CURRENT_CONVENTIONS_MARK = 'PROOF.md';
 
 function writeConventions(root, repoNames) {
   const file = path.join(root, 'CLAUDE.md');
@@ -79,8 +86,24 @@ function detectRepos(root) {
     .map((d) => ({ name: d.name, path: d.name }));
 }
 
-module.exports = function initCmd() {
+function hintIfOlder(root) {
+  const file = path.join(root, 'CLAUDE.md');
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const section = text.split('## gstack-loops')[1];
+  if (section !== undefined && !section.split('\n## ')[0].includes(CURRENT_CONVENTIONS_MARK)) {
+    console.log(c.dim('  CLAUDE.md\'s gstack-loops section predates the review layers; left as is (it is yours).'));
+    console.log(c.dim('  To see the current text: gloop init --print-conventions'));
+  }
+}
+
+module.exports = function initCmd(opts = {}) {
   const root = process.cwd();
+  if (opts.printConventions) {
+    let names = [];
+    try { names = (readJSON(path.join(root, CONFIG_NAME), {}).repos || []).map((r) => r.name); } catch { /* names are cosmetic */ }
+    console.log(conventionsSection(names.length ? names : ['<your repos>']));
+    return;
+  }
   const target = path.join(root, CONFIG_NAME);
 
   // Safe to re-run: an existing workspace keeps its loops.json byte-for-byte and only gets
@@ -93,6 +116,7 @@ module.exports = function initCmd() {
     reportGuides(writeReviewGuides(root, repos));
     const outcome = writeConventions(root, repos.map((r) => r.name));
     if (outcome !== 'present') console.log(`${c.green('✓')} ${outcome} gstack-loops conventions in CLAUDE.md`);
+    else hintIfOlder(root);
     if (!existing.review) console.log(c.dim('  no "review" block in loops.json: defaults apply (security review on, default sensitivePaths).'));
     return;
   }
@@ -119,7 +143,7 @@ module.exports = function initCmd() {
 
   // Codify the loop + gstack conventions into the workspace CLAUDE.md.
   const outcome = writeConventions(root, repos.map((r) => r.name));
-  if (outcome === 'present') console.log(c.dim('  CLAUDE.md already has a gstack-loops section — left as is.'));
+  if (outcome === 'present') { console.log(c.dim('  CLAUDE.md already has a gstack-loops section — left as is.')); hintIfOlder(root); }
   else console.log(`${c.green('✓')} ${outcome} gstack-loops conventions in CLAUDE.md (loop rules + Definition of Done)`);
 
   reportGuides(writeReviewGuides(root, repos));

@@ -118,6 +118,7 @@ test('review that never converges ends BLOCKED after the fix budget, naming the 
     assert.match(r.run.reason, /did not converge after 1 cycles — re-evaluate the approach/);
     assert.match(r.run.reason, /r1-01 \(reported again in cycle 2\)/);
     assert.deepEqual(r.run.cycles, { review: 2, fix: 1, security: 0, securityFix: 0 });
+    assert.deepEqual(r.run.converged, { review: false, security: null }, 'a blocked review is recorded as not converged');
     assert.equal(r.loop.status, 'blocked');
   } finally { cleanup(r); }
 });
@@ -374,6 +375,7 @@ test('clean run: build and review are separate processes; reviewer is read-only;
     assert.equal(r.runs.length, 1, 'exactly one history record');
     assert.equal(r.run.outcome, 'needs-human');
     assert.deepEqual(r.run.cycles, { review: 1, fix: 0, security: 1, securityFix: 0 });
+    assert.deepEqual(r.run.converged, { review: true, security: true });
     assert.ok(fs.existsSync(path.join(r.root, r.run.runDir, 'proof', 'build-svc.txt')), 'build gate leaves proof even when skipped');
     assert.ok(fs.existsSync(path.join(r.root, '.loops', 'runs', 'demo', 'latest')));
     assert.equal(git(path.join(r.root, 'worktrees', 'demo', 'svc'), 'log', '--oneline', 'main..HEAD').split('\n').length, 1);

@@ -1,6 +1,6 @@
 ---
 title: gstack-loops v1.1 — review layers: proof, fresh-context review, convergence, risk tiers, feedback
-status: P0 + P1 built; P2 ready-to-build
+status: P0, P1, P2 built
 owner: csakash
 depends_on: gstack-loops v1 (docs/SPEC-v1.md), gstack (/review, /qa, /ship), Claude Code (/security-review)
 supports: Claude Code only
@@ -331,6 +331,68 @@ build → review ⇄ fix → security ⇄ secfix → qa → [review, security on
   only missing `REVIEW.md` files.
 - P1-5 `test/workflow.test.js` passes: the three commands keep their names, order, and roles.
 
+## P2 plan (2026-10-27)
+
+The P1 workflow contract still holds: `/gloop-spec` → `/gloop-build` → `/gloop-ship` keep their
+names, order and jobs, and gain no question for the user. `test/workflow.test.js` stays green.
+
+### Decisions and deviations from the original P2 design
+
+1. **Interactive loops are measured too.** The owner's daily workflow is interactive, and only
+   headless runs write `history.json`, so a stats command built on that file alone would show
+   nothing for most real loops. When `gloop reap` (or `drop --if-merged`) sees a merged PR for a
+   loop whose latest record is not a successful headless run, it appends a record with
+   `mode: "interactive"` (cycle counts `null`: the driver did not run them). Merges and reverts,
+   the article's guardrail metric, are then counted for every loop.
+2. **Reverts are checked over time, not once.** A revert happens days after a merge, so a check
+   at merge time almost always says "no". `gloop reap` re-checks every merged record from the
+   last 30 days whose `reverted` is not yet `true`; `gloop stats --refresh` does the same on
+   demand. Plain `gloop stats` stays offline and reads only `history.json`.
+3. **What counts as a revert:** a GitHub revert PR (body `Reverts owner/repo#N`, or title
+   `Revert "<original title>"`), or a commit on the base branch whose message says
+   `This reverts commit <merge sha>`. `reverted` is `true` if either is found, `false` if at least
+   one check ran and found nothing, `null` if neither could run.
+4. **Merge details are stored per repo** (`merged: { repo: { number, url, title, mergeCommit,
+   mergedAt } }`), so the revert check can run after the worktree is gone.
+5. **`lib/rules.js` holds nine rule sentences.** They appear verbatim in the driver's author
+   prompts and in a "Rules" section of `/gloop-build`; `test/rules.test.js` fails on any drift.
+   This replaces the manual "keep in sync" convention.
+6. **CLAUDE.md conventions:** new workspaces get the updated Definition of Done (proof, security
+   review, REVIEW.md, sensitive paths). An existing section is left as is, never rewritten under
+   the owner; `gloop init` says it is older and where the current text lives.
+7. **Branch protection is printed, never applied.** `./setup --team` prints
+   `templates/branch-protection.md`: dismiss stale approvals on new commits, bot approvals do not
+   count, require conversation resolution, CODEOWNERS for the sensitive paths.
+8. **Tests use a fake `gh`** (`test/fixtures/gh-bin/gh`), the same pattern as the fake `claude`:
+   no test touches GitHub.
+
+### P2 as built (2026-10-27)
+
+Status: **built**, 121 tests green, criteria 19–22 and P2-1…P2-4 met. The workflow contract
+still holds (`/gloop-spec` untouched; `/gloop-build` gained only its "Rules" section;
+`/gloop-ship` unchanged in P2). New guard tests were checked by deliberately breaking the code
+they protect: rewording one rule in `/gloop-build`, letting a blocked run absorb a later merge,
+skipping the merge-time revert check, and narrowing revert-PR matching all turn the suite red.
+That last one first slipped through, because the test's revert PR matched by title as well as
+body; it is now two tests, one per matching rule.
+
+- `gloop stats` shows up to the latest 20 runs and the aggregates; `--json` for scripts;
+  `--refresh` re-checks recent merges first.
+- History records gain `converged: { review, security }` (recorded, not inferred, from P2 on),
+  `merged` (per-repo PR details) and `revertCheckedAt`.
+- `gloop init --print-conventions` prints the current CLAUDE.md section, for workspaces whose
+  section predates the review layers.
+
+### P2 acceptance criteria (in addition to 19–22 above)
+
+- P2-1 Reaping a merged loop with no headless record appends one `interactive` record with its
+  PR, merge commit and `mergedAt`; reaping a loop whose latest record shipped updates that record.
+- P2-2 `reverted` becomes `true` when a revert PR or revert commit appears after the merge, on the
+  next `reap` or `stats --refresh`; records older than 30 days are not re-checked by reap.
+- P2-3 `gloop stats --json` prints the same numbers as the table, for scripts.
+- P2-4 `gloop init` in a workspace whose CLAUDE.md section predates P2 leaves it unchanged and
+  prints a hint.
+
 ## Phases
 
 **P0 — backbone (land first).** Stage runner; author/reviewer processes; findings + resolution
@@ -441,13 +503,16 @@ everything; loops remain ordinary branches and worktrees.
 | `lib/risk.js` | **new** (P1) — zero-dep glob matcher, default sensitive list, sensitive-path check |
 | `commands/risk.js` | **new** (P1) — `gloop risk [slug]`, shared by the risk stage and the skills |
 | `test/p1.test.js`, `test/workflow.test.js` | **new** (P1) — matcher, config, `gloop risk`, re-runnable init; the three-command workflow contract |
-| `lib/history.js` | **new** (P0) — append `.loops/history.json`; update + stats aggregation in P2 |
+| `lib/history.js` | **new** (P0) — `.loops/history.json` storage; P2 adds `update` and `computeStats` |
 | `lib/config.js` | `review.fixCycles`, `review.sensitivePaths` defaults |
 | `commands/run.js` | drive the stage runner; `needs-human` outcome; per-stage dry-run |
 | `commands/init.js` | `REVIEW.md` scaffold; `sensitivePaths` default; updated CLAUDE.md conventions |
 | `commands/ls.js` | show `needs-human (touched …)` |
 | `commands/drop.js` / `reap.js` | update history with `mergedAt` / `reverted` |
-| `commands/stats.js` | **new** |
+| `commands/stats.js` | **new** (P2) — `gloop stats [--json] [--refresh]` |
+| `lib/outcomes.js` | **new** (P2) — record merges (headless and interactive), detect reverts |
+| `test/fixtures/gh-bin/gh`, `test/outcomes.test.js`, `test/rules.test.js`, `test/p2.test.js` | **new** (P2) — fake `gh`; merges, reverts, stats; rules sync; conventions, branch protection, docs |
+| `templates/branch-protection.md` | **new** (P2) — printed by `./setup --team` |
 | `bin/gloop` | `stats` subcommand; `--legacy-driver` flag; help text |
 | `skills/gloop-build/SKILL.md`, `gloop-ship/SKILL.md`, `gloop-run/SKILL.md`, `gloop/SKILL.md` | mirror stages, proof, convergence, severity, sensitive paths |
 | `templates/loops.json`, `templates/REVIEW.md` | config + scaffold |

@@ -12,13 +12,14 @@ See [SPEC.md](SPEC.md) for the current loop spec (v1.1 review layers) and
 ```
 bin/gloop            CLI entry (subcommand dispatch)
 lib/                 config, registry, ports, env-template, worktree, proc, gh,
-                     driver (agent-specific), pipeline (stage runner), review, history, risk
-commands/            init | new | ls | run | stop | risk | drop | reap
+                     driver (agent-specific), pipeline (stage runner), review, rules,
+                     history, outcomes, risk
+commands/            init | new | ls | run | stop | risk | drop | reap | stats
 skills/loop-*/       slash commands (registered by ./setup)
-templates/           loops.json + REVIEW.md scaffolds written by gloop init
+templates/           loops.json + REVIEW.md scaffolds (gloop init), branch-protection.md (setup --team)
 test/                node:test suites
-test/fixtures/bin/claude   fake agent the pipeline tests put on PATH
-docs/                PARALLEL_SHIPPING.md, SPEC-v1.md
+test/fixtures/       fake `claude` (bin/) and fake `gh` (gh-bin/) the tests put on PATH
+docs/                REVIEW_LAYERS.md, PARALLEL_SHIPPING.md, SPEC-v1.md
 setup                installer
 ```
 
@@ -34,14 +35,18 @@ setup                installer
   so; nothing crashes).
 - `.env` files are seeded into worktrees and must never be committed (see `.gitignore`).
 - Headless runs go through the stage runner in `lib/pipeline.js`; it enforces the rules
-  (fresh-context read-only reviewer, convergence, proof, never ship red) in code. Keep the
-  stage prompts in `lib/driver.js` and the `/gloop-build` skill body describing the same rules.
+  (fresh-context read-only reviewer, convergence, proof, never ship red) in code.
+- The rules themselves live once, in `lib/rules.js`. The driver quotes them in every author
+  prompt and `/gloop-build` lists them verbatim; `test/rules.test.js` fails on drift. Change a
+  rule there, then paste it into the skill.
 - **The owner's workflow is `/gloop-spec` → `/gloop-build` → `/gloop-ship`.** Keep those three
   commands' names, order and jobs; improve them by adding checks inside, never by adding a
   question for the user. `test/workflow.test.js` pins this; if a change needs it to fail, the
   change is wrong.
 - Only an autonomous `ship` stage may push. Every other stage is push-guarded in
   `lib/driver.js` (deny rule + git env) and `lib/pipeline.js` (tracking-ref check).
+- Anything that talks to GitHub goes through `lib/gh.js` and must return null, not throw,
+  when `gh` is missing. Tests use the fake `gh` in `test/fixtures/gh-bin/`; none touch GitHub.
 - Pipeline tests use the fake `claude` in `test/fixtures/bin/`. Add a failure scenario there
   for every new way a stage can lie or half-finish, before its happy path.
 

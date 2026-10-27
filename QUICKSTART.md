@@ -128,8 +128,13 @@ decision stays human. They refuse to run without it.
 
 - **Isolation** — one branch + worktree(s) + port block per loop; parallel loops never collide.
 - **Cross-repo wiring** — a feature spanning repos gets matching ports and env automatically.
-- **Never ships red** — if `/review` or `/qa` can't pass, or the build fails, the loop stops
-  and reports which gate failed. It does not push broken code.
+- **Never ships red** — if review, security review or `/qa` can't pass within the fix budget,
+  or the build fails, the loop stops and reports which gate failed. It does not push broken code.
+- **Proof, not promises** — test output, QA notes and a `PROOF.md` (Testing / Risk / How to
+  revert) are saved for every loop, and `PROOF.md` becomes the PR body.
+- **A human for sensitive code** — changes to CI, auth, billing, migrations or installers
+  (`review.sensitivePaths`) always wait for a person before push. See
+  [docs/REVIEW_LAYERS.md](docs/REVIEW_LAYERS.md).
 - **Cleanup** — dev servers stop when a loop finishes; the worktree is kept until its PR
   merges, then `gloop reap` removes it (worktree, branch, registry entry, stray processes).
 
@@ -157,7 +162,10 @@ gloop run <slug> --mode <m> [--dry-run] drive the loop (m: interactive|bypass|au
 gloop stop <slug>                       stop the loop's dev servers
 gloop risk [slug]                       list sensitive files a loop touches (CI, auth, billing, …)
 gloop drop <slug> [--delete-branch]     tear down a loop (refuses if unmerged; --force to override)
-gloop reap                              drop every loop whose PR has merged
+gloop reap                              drop merged loops; record merges, re-check for reverts
+gloop stats [--json] [--refresh]        how loops are doing: outcomes, blocks, cycles, reverts
 ```
 
-Slash commands in a session: `/loop-new`, `/loop-run`, `/loop-ls`, `/loop-drop`.
+Slash commands in a session: `/gloop-spec` → `/gloop-build` → `/gloop-ship` for the daily loop,
+plus `/gloop-new`, `/gloop-run`, `/gloop-ls`, `/gloop-drop`, `/gloop-reap`, or just
+`/gloop <what you want>`. The old `/loop-*` names still work.

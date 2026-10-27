@@ -39,7 +39,8 @@ gloop new attachment-previews           # paired worktrees + wired ports on feat
 gloop run attachment-previews --mode interactive   # or bypass / autonomous
 gloop ls                                # see all loops: ports, servers, PR state
 gloop risk attachment-previews          # sensitive files it touches (CI, auth, billing, …)
-gloop reap                              # tear down loops whose PR has merged
+gloop reap                              # tear down merged loops; record merges and reverts
+gloop stats                             # outcomes, where runs block, cycles-to-pass, revert rate
 ```
 
 Slash commands (in a Claude Code session), one per step:
@@ -56,6 +57,7 @@ green; `/gloop-ship` raises the PR for the worktree's branch.
 - [QUICKSTART.md](QUICKSTART.md) — zero to shipping a PR; capabilities, modes, what to expect
 - [SPEC.md](SPEC.md) — v1.1 spec: review layers (proof, fresh-context review, convergence, risk tiers)
 - [docs/SPEC-v1.md](docs/SPEC-v1.md) — full v1 design + acceptance criteria
+- [docs/REVIEW_LAYERS.md](docs/REVIEW_LAYERS.md) — the review layers, and where each lives
 - [docs/PARALLEL_SHIPPING.md](docs/PARALLEL_SHIPPING.md) — landing many PRs without conflicts
 
 ## Config: `loops.json`

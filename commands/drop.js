@@ -8,6 +8,7 @@ const registry = require('../lib/registry');
 const wt = require('../lib/worktree');
 const { stopServer, isAlive } = require('../lib/proc');
 const { ghAvailable, prForBranch } = require('../lib/gh');
+const outcomes = require('../lib/outcomes');
 const { c, die } = require('../lib/util');
 
 module.exports = function dropCmd(slug, opts = {}) {
@@ -19,9 +20,19 @@ module.exports = function dropCmd(slug, opts = {}) {
   // --if-merged: only proceed when a PR exists AND is merged in every repo.
   if (opts.ifMerged) {
     if (!ghAvailable()) die('--if-merged needs the gh CLI.');
+    const prs = {};
     for (const name of loop.repos) {
       const pr = prForBranch(path.join(cfg.root, loop.worktrees[name]), loop.branch);
       if (!pr || !pr.merged) { console.log(c.dim(`skip "${slug}": ${name} PR not merged yet`)); return; }
+      prs[name] = pr;
+    }
+    // Record the merge before the worktree goes: it is the only moment all PR details are
+    // at hand. Bookkeeping must never stop a reap.
+    try {
+      const rec = outcomes.recordMerge(cfg, slug, loop, prs);
+      console.log(c.dim(`  recorded merge of "${slug}" (${rec.mode}) in .loops/history.json`));
+    } catch (e) {
+      console.error(c.yellow(`  ! could not record the merge in .loops/history.json: ${e.message}`));
     }
   }
 
