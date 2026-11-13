@@ -74,3 +74,7 @@ built.
 ## Development
 
 Pure Node, zero runtime deps. `npm test` runs the suite (`node --test`).
+
+## License
+
+[MIT](LICENSE) © 2026 Akash Munshi
